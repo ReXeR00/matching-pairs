@@ -1,0 +1,64 @@
+/* _hero.scss
+   Landing hero section on Home page.
+   Large background image, stacked title with stroked outline and glow.
+*/
+
+.hero-banner {
+  position: relative;
+  width: 100%;
+  min-height: 50vh;
+  display: grid;
+  place-items: center;
+  isolation: isolate;
+  text-align: center;
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: var(--elev);
+  margin-top: 16px;
+}
+
+.hero-banner__image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: brightness(.9) contrast(1.05);
+  z-index: -1;
+}
+
+.hero-banner__title {
+  position: relative;
+  text-align: center;
+  line-height: 1.05;
+  text-transform: uppercase;
+  font-weight: 800;
+  font-size: clamp(36px, 8vw, 100px);
+  padding-inline: 20px;
+  color: var(--title-color);
+  text-shadow: 0 0 20px color-mix(in oklab, var(--title-glow) 60%, transparent);
+}
+
+.hero-banner__stroked-title {
+  position: absolute;
+  inset: 0;
+  color: transparent;
+  -webkit-text-stroke: 2px var(--title-stroke);
+  text-stroke: 2px var(--title-stroke);
+  transform: translateY(2px);
+  pointer-events: none;
+}
+
+.hero-banner__filled-title {
+  display: block;
+  color: var(--title-color);
+}
+
+.hero-banner__byline {
+  display: block;
+  margin-top: clamp(6px, 1vmin, 12px);
+  font-size: clamp(12px, 2.2vw, 18px);
+  font-weight: 600;
+  color: color-mix(in oklab, var(--title-color) 70%, transparent);
+  letter-spacing: .08em;
+}

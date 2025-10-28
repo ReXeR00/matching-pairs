@@ -1,0 +1,65 @@
+/* _board.scss
+   Game board / matching pairs UI.
+   Cards for known word vs learning word, selected state, matched state, etc.
+*/
+
+.columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  padding: 16px;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-weight: 650;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+  position: relative;
+  transition: transform 0.08s ease, background 0.15s ease;
+  color: var(--ink); // <-- dark mode readable on cards
+
+  &:active {
+    transform: scale(0.98);
+  }
+
+  &.selected {
+    background: #e8f3ff;
+  }
+
+  &.matched {
+    background: #eaf8ef;
+    border-color: #bde5c9;
+    opacity: 0.92;
+  }
+
+  &.disabled {
+    pointer-events: none;
+  }
+}
+
+/* Dark mode tweaks */
+html[data-theme="dark"] {
+  .card.selected {
+    background: #1f2a44;
+  }
+
+  .card.matched {
+    background: #123321;
+    border-color: #1f5a35;
+  }
+}

@@ -1,0 +1,94 @@
+/* _forms.scss
+   Form controls, inputs, textarea, CSV preview tables, and pair builder rows.
+   Everything about editing words / data entry lives here.
+*/
+ .board {
+    padding-bottom: 40px;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    box-shadow: var(--elev);
+    padding: 16px;
+    margin-top: 16px;
+  }
+
+  .hidden {
+    display: none;
+  }
+
+  .row {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    align-items: end;
+  }
+
+  .stack {
+    display: grid;
+    gap: 10px;
+  }
+
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  font-size: 16px;
+  background: var(--panel);
+  color: var(--ink); // <-- dark mode readable text
+}
+
+label {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+textarea {
+  min-height: 140px;
+}
+
+/* CSV preview */
+.csv-preview {
+  margin-top: 10px;
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  th,
+  td {
+    border: 1px solid var(--card-border);
+    padding: 6px 8px;
+    text-align: left;
+    color: var(--ink); // make sure it's readable in dark
+  }
+
+  .meta {
+    color: var(--muted);
+    margin: 8px 0;
+  }
+}
+
+/* Pair builder rows in Storage page */
+.pair-builder {
+  display: grid;
+  gap: 10px;
+}
+
+.pair-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+
+  .pair-known,
+  .pair-learn {
+    width: 100%;
+  }
+}

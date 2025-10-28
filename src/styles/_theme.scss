@@ -1,0 +1,15 @@
+/* _theme.scss
+   Applies theme variables to :root as CSS variables.
+   Light mode is default. Dark mode overrides on [data-theme="dark"].
+   These CSS vars are then used everywhere via var(--bg), var(--ink), etc.
+*/
+
+@use "./variables" as *;
+
+:root {
+  @include css-vars($light);
+}
+
+html[data-theme="dark"] {
+  @include css-vars($dark);
+}

@@ -1,0 +1,63 @@
+/* _base.scss
+   Global structural styles: body, layout helpers, generic containers, form elements.
+   Think of this as "app shell" styling.
+*/
+
+@use "./variables" as *;
+@use "./mixins" as *;
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--ink); // <-- this fixes dark mode text visibility
+}
+
+.wrap {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 18px;
+}
+
+.board {
+  padding-bottom: 40px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  box-shadow: var(--elev);
+  padding: 16px;
+  margin-top: 16px;
+}
+
+.hidden {
+  display: none;
+}
+
+.row {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  align-items: end;
+}
+
+.stack {
+  display: grid;
+  gap: 10px;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--card-border);
+  margin: 16px 0;
+}

@@ -1,0 +1,134 @@
+/* _topbar.scss
+   Header / navigation bar module.
+   Includes sticky top bar, app title, stats chips, theme toggle switch.
+*/
+
+@use "./variables" as *;
+@use "./mixins" as *;
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: linear-gradient(180deg, var(--panel), rgba(255, 255, 255, 0));
+  border-bottom: 1px solid var(--card-border);
+  backdrop-filter: saturate(1.2) blur(6px);
+}
+
+.topbar-grid {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 14px;
+  align-items: center;
+}
+
+.brand {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+
+  .app-name {
+    font-size: clamp(18px, 2.4vw, 28px);
+    font-weight: 600;
+    color: var(--ink); // <-- make sure header text is visible in dark
+  }
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  justify-content: flex-end;
+}
+
+.stats {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  background: #eef2ff;
+  border: 1px solid #dbe3ff;
+  color: #1e293b;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+html[data-theme="dark"] .chip {
+  background: #15233b;
+  border-color: #24324d;
+  color: #e2e8f0; /* brighter chip text in dark */
+}
+
+/* THEME TOGGLE SWITCH ------------------------------------------ */
+
+.theme-toggle {
+  --w: 64px;
+  --h: 32px;
+  --pad: 3px;
+  position: relative;
+
+  input {
+    display: none;
+  }
+
+  .toggle-track {
+    width: var(--w);
+    height: var(--h);
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #dfe7ff;
+    border: 1px solid #c7d2fe;
+    border-radius: 999px;
+    position: relative;
+    padding: 0 var(--pad);
+    cursor: pointer;
+
+    .icon {
+      font-size: 16px;
+      line-height: 1;
+      pointer-events: none;
+      color: #1e293b;
+    }
+
+    .thumb {
+      position: absolute;
+      top: var(--pad);
+      left: var(--pad);
+      width: calc(var(--h) - var(--pad) * 2);
+      height: calc(var(--h) - var(--pad) * 2);
+      background: #fff;
+      border-radius: 50%;
+      box-shadow: var(--elev);
+      transition: left 0.2s ease;
+    }
+  }
+
+  /* checked -> dark */
+  input:checked + .toggle-track {
+    background: #1f2937;
+    border-color: #334155;
+    color: #e5e7eb;
+
+    .icon {
+      color: #e5e7eb; // light icon in dark mode
+    }
+
+    .thumb {
+      left: calc(var(--w) - var(--h) + var(--pad));
+      background: #0b1220;
+    }
+  }
+}

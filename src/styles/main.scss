@@ -1,0 +1,15 @@
+/* main.scss
+   Root stylesheet for the app.
+   We "use" all partials so the whole app gets styled.
+*/
+
+@use "./variables";
+@use "./mixins";
+@use "./theme";
+@use "./base";
+@use "./forms";
+@use "./board";
+@use "./buttons";
+@use "./topbar";
+@use "./hero";
+@use "./GameOverModal";

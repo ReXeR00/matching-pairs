@@ -1,0 +1,55 @@
+/* _variables.scss
+   Theme tokens, color system, spacing, radii.
+   This file defines the design language of the app.
+   Both light and dark modes pull values from these maps.
+*/
+
+$light: (
+  bg: #f5f5dc, // beige background for light
+  panel: #ffffff,
+  ink: #0f172a, // main text color
+  muted: #6b7280, // subtle text
+  brand: #2563eb,
+  ok: #16a34a,
+  bad: #ef4444,
+  card: #ffffff,
+  card-border: #e5e7eb,
+  elev: 0 6px 20px rgba(0, 0, 0, 0.06),
+  title-color: #000000,
+  title-stroke: #000000,
+  title-glow: #4f8cff
+);
+
+$dark: (
+  // DARK THEME MODULE:
+  // App in "night mode": navy / cyber glow look.
+  bg: #191970, // deep midnight blue background
+  panel: #111827,
+  ink: #e5e7eb, // <-- readable text color in dark mode (was too dark before)
+  muted: #9ca3af,
+  brand: #4f8cff,
+  ok: #22c55e,
+  bad: #f87171,
+  card: #0b1220,
+  card-border: #1f2937,
+  elev: 0 8px 24px rgba(0, 0, 0, 0.35),
+  title-color: #ffffff,
+  title-stroke: #ffffff,
+  title-glow: #4f8cff
+);
+
+// Extra loose variables we also use in components (modal etc.)
+$clr-blue: #5a81ff;
+$clr-green: #2eea9d;
+$clr-red: #fe6c9b;
+$clr-bg-dark: #151419;
+$clr-text-dim: #cccccc;
+
+$radius-card: 16px;
+$shadow-card: 0 12px 25px rgba(0, 0, 0, 0.8);
+
+@mixin css-vars($map) {
+  @each $k, $v in $map {
+    --#{$k}: #{$v};
+  }
+}

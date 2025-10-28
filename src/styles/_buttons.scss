@@ -1,0 +1,114 @@
+/* _buttons.scss
+   Button styling for both light and dark themes.
+   Light mode = soft/pill buttons.
+   Dark mode = neon cyber glow buttons.
+*/
+
+.btn {
+  border: none;
+  outline: none;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  position: relative;
+  z-index: 0;
+  font-weight: 600;
+  font-size: 16px;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  padding: 10px 14px;
+  border-radius: 12px;
+  box-shadow: var(--elev);
+  background: var(--panel);
+  border: 1px solid var(--card-border);
+  color: var(--ink);
+
+  &.ghost {
+    background: transparent;
+  }
+}
+
+/* LIGHT MODE variant (soft pill / random pastel from ThemeToggle) */
+html[data-theme="light"] .btn {
+  background-color: var(--btn33-bg, #c2fbd7);
+  border-radius: 100px;
+  color: var(--btn33-fg, green);
+  border: 0;
+  box-shadow:
+    rgba(var(--btn33-rgb, 44,187,99), 0.2) 0 -25px 18px -14px inset,
+    rgba(var(--btn33-rgb, 44,187,99), 0.15) 0 1px 2px,
+    rgba(var(--btn33-rgb, 44,187,99), 0.15) 0 2px 4px,
+    rgba(var(--btn33-rgb, 44,187,99), 0.15) 0 4px 8px,
+    rgba(var(--btn33-rgb, 44,187,99), 0.15) 0 8px 16px,
+    rgba(var(--btn33-rgb, 44,187,99), 0.15) 0 16px 32px;
+
+  &:hover {
+    transform: scale(1.05) rotate(-1deg);
+    box-shadow:
+      rgba(var(--btn33-rgb, 44,187,99), 0.35) 0 -25px 18px -14px inset,
+      rgba(var(--btn33-rgb, 44,187,99), 0.25) 0 1px 2px,
+      rgba(var(--btn33-rgb, 44,187,99), 0.25) 0 2px 4px,
+      rgba(var(--btn33-rgb, 44,187,99), 0.25) 0 4px 8px,
+      rgba(var(--btn33-rgb, 44,187,99), 0.25) 0 8px 16px,
+      rgba(var(--btn33-rgb, 44,187,99), 0.25) 0 16px 32px;
+  }
+}
+
+/* DARK MODE variant (neon glow / button-85 style) */
+html[data-theme="dark"] .btn {
+  border-radius: 10px;
+  color: #fff; /* <-- visible in dark */
+  background: #111;
+  padding: 0.6em 2em;
+  border: none;
+
+  &::before {
+    content: "";
+    background: linear-gradient(
+      45deg,
+      #ff0000,
+      #ff7300,
+      #fffb00,
+      #48ff00,
+      #00ffd5,
+      #002bff,
+      #7a00ff,
+      #ff00c8,
+      #ff0000
+    );
+    position: absolute;
+    top: -2px;
+    left: -2px;
+    background-size: 400%;
+    z-index: -1;
+    filter: blur(5px);
+    -webkit-filter: blur(5px);
+    width: calc(100% + 4px);
+    height: calc(100% + 4px);
+    animation: glowing-button-85 20s linear infinite;
+    transition: opacity 0.3s ease-in-out;
+    border-radius: 10px;
+  }
+
+  &::after {
+    z-index: -1;
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: #222;
+    border-radius: 10px;
+  }
+}
+
+@keyframes glowing-button-85 {
+  0% {
+    background-position: 0 0;
+  }
+  50% {
+    background-position: 400% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}

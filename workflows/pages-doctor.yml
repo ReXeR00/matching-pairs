@@ -8,14 +8,15 @@ on:
 
 permissions:
   contents: read
+  pages: read
 
 jobs:
   pages-doctor:
     runs-on: ubuntu-latest
     env:
       REPO_NAME: ${{ github.event.repository.name }}
-      EXPECTED_BASE: "/${{ github.event.repository.name }}/"
       OWNER: ${{ github.repository_owner }}
+      EXPECTED_BASE: "/${{ github.event.repository.name }}/"
 
     steps:
       - name: Checkout 🛎️
@@ -30,50 +31,60 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Quick config checks (Vite base, Router basename)
+      - name: Config checks (Vite base, Router basename)
         shell: bash
         run: |
-          echo "### Pages Doctor — config checks" >> $GITHUB_STEP_SUMMARY
+          echo "## Pages Doctor — Config" >> $GITHUB_STEP_SUMMARY
           echo "- Expected Vite base: \`${EXPECTED_BASE}\`" >> $GITHUB_STEP_SUMMARY
 
-          # 1) Vite base must match /<repo>/
           if grep -R --line-number -E "base:\s*['\"]${EXPECTED_BASE}['\"]" vite.config.* >/dev/null 2>&1; then
             echo "✅ Vite base OK" >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ Vite base not found or mismatched. Add in vite.config.js: \`base: \"${EXPECTED_BASE}\",\`" >> $GITHUB_STEP_SUMMARY
+            echo "❌ Vite base mismatch. Add \`base: \"${EXPECTED_BASE}\",\` to vite.config.js" >> $GITHUB_STEP_SUMMARY
             echo "::warning title=Vite base mismatch::Set base: \"${EXPECTED_BASE}\" in vite.config.js"
           fi
 
-          # 2) Router should use basename = import.meta.env.BASE_URL
-          if grep -R -E "BrowserRouter.*basename=.*import\.meta\.env\.BASE_URL" -n src >/dev/null 2>&1; then
+          if grep -R -n -E "BrowserRouter.*basename=.*import\.meta\.env\.BASE_URL" src >/dev/null 2>&1; then
             echo "✅ Router basename OK" >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ Router basename not detected. Use: <BrowserRouter basename={import.meta.env.BASE_URL}>." >> $GITHUB_STEP_SUMMARY
+            echo "❌ Router basename missing. Use <BrowserRouter basename={import.meta.env.BASE_URL}>" >> $GITHUB_STEP_SUMMARY
             echo "::warning title=Router basename missing::Use import.meta.env.BASE_URL"
           fi
 
       - name: Build 🔧
         run: npm run build
 
-      - name: Verify dist/index.html (no /src/main.jsx, has hashed assets)
+      - name: Dist sanity check
         shell: bash
         run: |
-          echo "### Build checks" >> $GITHUB_STEP_SUMMARY
-          test -f dist/index.html || (echo "❌ dist/index.html missing (build failed?)" >> $GITHUB_STEP_SUMMARY; exit 1)
+          echo "## Dist checks" >> $GITHUB_STEP_SUMMARY
+          test -f dist/index.html || (echo "❌ dist/index.html missing" >> $GITHUB_STEP_SUMMARY; exit 1)
 
           if grep -q "/src/main.jsx" dist/index.html; then
-            echo "❌ Found dev script tag (/src/main.jsx) in dist/index.html — you're publishing DEV HTML." >> $GITHUB_STEP_SUMMARY
+            echo "❌ dist/index.html references /src/main.jsx (DEV HTML!)" >> $GITHUB_STEP_SUMMARY
             echo "::error title=DEV index.html detected::dist/index.html references /src/main.jsx"
             exit 1
           else
             echo "✅ No /src/main.jsx in dist" >> $GITHUB_STEP_SUMMARY
           fi
 
-          if grep -E -q "assets/.+\.js" dist/index.html; then
-            echo "✅ Has compiled asset references (assets/*.js)" >> $GITHUB_STEP_SUMMARY
+          if ! grep -E -q "assets/.+\.js" dist/index.html; then
+            echo "❌ No assets/*.js references — build broken?" >> $GITHUB_STEP_SUMMARY
+            echo "::error title=No compiled assets::dist/index.html lacks assets/*.js"
+            exit 1
           else
-            echo "❌ No assets/*.js references in dist/index.html — build likely broken." >> $GITHUB_STEP_SUMMARY
-            echo "::error title=No compiled assets in dist/index.html::Expected assets/*.js"
+            echo "✅ Compiled JS found (assets/*.js)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "### First lines of dist/index.html" >> $GITHUB_STEP_SUMMARY
+          head -n 15 dist/index.html | sed 's/</\&lt;/g' | sed 's/>/\&gt;/g' >> $GITHUB_STEP_SUMMARY
+
+          # wyciągnij główny JS i sprawdź, czy istnieje
+          MAINJS=$(grep -Eo "assets/[a-zA-Z0-9\-\_]+\.js" dist/index.html | head -n1 || true)
+          if [ -n "$MAINJS" ] && [ -f "dist/$MAINJS" ]; then
+            echo "✅ Main asset present: $MAINJS" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Main asset missing in dist: $MAINJS" >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
 
@@ -83,34 +94,43 @@ jobs:
           name: dist-artifact
           path: dist
           if-no-files-found: error
-          retention-days: 5
+          retention-days: 7
 
-      # Optional: live health check if GH Pages is already configured
-      - name: Live health check (best-effort)
+      - name: Read GH Pages config
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "## GH Pages config" >> $GITHUB_STEP_SUMMARY
+          gh api "repos/${OWNER}/${REPO_NAME}/pages" > /tmp/pages.json 2>/dev/null || true
+          if [ -s /tmp/pages.json ]; then
+            BRANCH=$(jq -r '.source.branch // empty' /tmp/pages.json)
+            FOLDER=$(jq -r '.source.path // empty' /tmp/pages.json)
+            URL=$(jq -r '.html_url // empty' /tmp/pages.json)
+            echo "- Source: ${BRANCH:-unknown} ${FOLDER:-/}" >> $GITHUB_STEP_SUMMARY
+            echo "- URL: ${URL:-n/a}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- Pages not configured yet (or no permission to read)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Live probe (best-effort)
         if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         run: |
           URL="https://${OWNER}.github.io/${REPO_NAME}/"
-          echo "### Live check (best-effort)" >> $GITHUB_STEP_SUMMARY
+          echo "## Live check" >> $GITHUB_STEP_SUMMARY
           echo "- Checking ${URL}" >> $GITHUB_STEP_SUMMARY
-
-          # Retry for up to ~60s because Pages can take time to refresh
-          ok=0
-          for i in {1..10}; do
-            code=$(curl -s -o /tmp/p.html -w "%{http_code}" "${URL}" || true)
-            if [ "$code" = "200" ] || [ "$code" = "301" ] || [ "$code" = "302" ]; then
-              if grep -E "assets/.+\.js" /tmp/p.html >/dev/null 2>&1; then
-                echo "✅ Live page responds (${code}) and includes assets/*.js" >> $GITHUB_STEP_SUMMARY
-                ok=1
-                break
-              fi
+          code=$(curl -s -o /tmp/live.html -w "%{http_code}" "$URL" || true)
+          echo "- HTTP: $code" >> $GITHUB_STEP_SUMMARY
+          if [ "$code" != "200" ] && [ "$code" != "301" ] && [ "$code" != "302" ]; then
+            echo "⚠️ Not OK yet (Pages cache or misconfig). Most common fixes:" >> $GITHUB_STEP_SUMMARY
+            echo "- Set Pages source to gh-pages / root OR use Actions deploy" >> $GITHUB_STEP_SUMMARY
+            echo "- Ensure workflow deploys **dist/**, not repo root" >> $GITHUB_STEP_SUMMARY
+            echo "- Ensure Vite base is ${EXPECTED_BASE}" >> $GITHUB_STEP_SUMMARY
+          else
+            if grep -E "assets/.+\.js" /tmp/live.html >/dev/null 2>&1; then
+              echo "✅ Live HTML includes assets/*.js (good)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ Live HTML missing assets/*.js — often serving DEV HTML" >> $GITHUB_STEP_SUMMARY
             fi
-            sleep 6
-          done
-          if [ "$ok" = "0" ]; then
-            echo "⚠️ Live page not ready or misconfigured. Common causes:" >> $GITHUB_STEP_SUMMARY
-            echo "- Pages source not set to \`gh-pages / root\`" >> $GITHUB_STEP_SUMMARY
-            echo "- Workflow not deploying **dist/** (folder mismatch)" >> $GITHUB_STEP_SUMMARY
-            echo "- Wrong \`base\` in vite.config.js (should be \`${EXPECTED_BASE}\`)" >> $GITHUB_STEP_SUMMARY
-            echo "- Router missing \`basename={import.meta.env.BASE_URL}\`" >> $GITHUB_STEP_SUMMARY
           fi

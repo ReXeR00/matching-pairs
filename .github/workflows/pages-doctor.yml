@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  PROJECT_DIR: Matching-pairs           # ⬅️ tu wpisz nazwę podkatalogu z package.json
+  PROJECT_DIR: Matching-pairs           
   EXPECTED_BASE: "/${{ github.event.repository.name }}/"
 
 jobs:
@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install
         working-directory: ${{ env.PROJECT_DIR }}

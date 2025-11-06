@@ -1,12 +1,14 @@
 {
   "name": "matching-pairs",
   "version": "1.0.0",
-  "scripts": {
-    "dev": "vite --open",
-    "build": "vite build",
-    "preview": "vite preview",
-    "sass": "sass --watch src/styles.scss:src/styles.css"
-  },
+"scripts": {
+  "dev": "vite --open",
+  "build": "vite build",
+  "preview": "vite preview",
+  "sass": "sass --watch src/styles.scss:src/styles.css",
+  "deploy": "gh-pages -d dist",
+  "deploy:check": "npm run build && npx pages-doctor"
+},
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

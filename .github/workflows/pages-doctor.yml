@@ -1,5 +1,4 @@
-name: Pages Doctor (Vite + React)
-
+name: doctor
 on:
   push:
     branches: [ main ]

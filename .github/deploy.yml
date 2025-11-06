@@ -30,20 +30,20 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
+          cache-dependency-path: Matching-pairs/package-lock.json
 
       - name: Install deps
         run: npm ci
-        working-directory: ${{ env.PROJECT_DIR }}
+        working-directory: Matching-pairs
 
       - name: Build 🏗️
         run: npm run build
-        working-directory: ${{ env.PROJECT_DIR }}
+        working-directory: Matching-pairs
 
       - name: Upload artifact 📦
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ${{ env.PROJECT_DIR }}/dist
+          path: Matching-pairs/dist
 
       - name: Deploy 🚀
         id: deployment

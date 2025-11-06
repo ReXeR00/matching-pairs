@@ -52,6 +52,18 @@
   }
 }
 
+@keyframes cardFadeOut {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.96); }
+}
+@keyframes cardFadeIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.card.fading   { animation: cardFadeOut .5s ease forwards; }
+.card.appearing{ animation: cardFadeIn .5s ease both; }
+
 /* Dark mode tweaks */
 html[data-theme="dark"] {
   .card.selected {

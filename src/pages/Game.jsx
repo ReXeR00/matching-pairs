@@ -1,11 +1,9 @@
 // src/pages/Game.jsx
-
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useGame } from "../context/GameContext.jsx";
 import { useGameSounds } from "../hooks/useGameSounds.jsx";
-
 import GameOverModal from "../components/GameOverModal.jsx";
 
 import {
@@ -21,43 +19,48 @@ import {
 
 import { clamp, shuffle, stableId } from "../lib/utils.js";
 
-function Game() {
-  // global stats z contextu gry
-  const { stats, setStats } = useGame();
+const MAX_VISIBLE = 5;
 
+function Game() {
+  // global stats
+  const { stats, setStats } = useGame();
+  // sounds
   const { playCorrect, playWrong, setVolume, setMuted, AudioElements } =
     useGameSounds();
-
-  // nawigacja (do menu / do edycji słówek)
+  // nav
   const navigate = useNavigate();
 
-  // foldery / ustawienia rundy
+  // folders / settings
   const [folders, setFolders] = useState({});
   const [folderNames, setFolderNames] = useState([]);
   const [selectedFolder, setSelectedFolder] = useState("");
   const [pairCount, setPairCount] = useState(8);
 
-  // talie kart
-  const [leftDeck, setLeftDeck] = useState([]);
-  const [rightDeck, setRightDeck] = useState([]);
+  // queue of pairs (cała runda)
+  const [queue, setQueue] = useState([]); // [{pairId, known, learn}]
+  const queueIdxRef = useRef(0);
 
-  // aktualnie zaznaczone karty
+  // widoczne karty (zawsze max 5 par)
+  const [leftVisible, setLeftVisible] = useState([]);  // [{uid, word, pairId}]
+  const [rightVisible, setRightVisible] = useState([]); // [{uid, word, pairId}]
+
+  // zaznaczenia (indeksy w tablicach visible)
   const [selectedLeft, setSelectedLeft] = useState(null);
   const [selectedRight, setSelectedRight] = useState(null);
 
-  // czy runda trwa
+  // stan rundy / modal końca
   const [roundActive, setRoundActive] = useState(false);
-
-  // czy wyświetlamy ekran końca gry
   const [isFinished, setIsFinished] = useState(false);
 
-  // referencje czasu / timeoutu
+  // animacyjne znaczniki: {uid: true}
+  const [fading, setFading] = useState({});
+  const [appearing, setAppearing] = useState({});
+
+  // czasy
   const startTimeRef = useRef(0);
   const mismatchTimeoutRef = useRef(null);
 
-  // ---------------------------------
-  // INIT folderów, ustawień audio itp.
-  // ---------------------------------
+  // --- init folders + audio ---
   useEffect(() => {
     let f = loadFolders();
     f = ensureDefaults(f);
@@ -72,46 +75,37 @@ function Game() {
     setSelectedFolder(firstFolder);
 
     const rememberedPairs = getLastPairs();
-    if (rememberedPairs) {
-      setPairCount(rememberedPairs);
-    }
+    if (rememberedPairs) setPairCount(rememberedPairs);
 
-    // domyślne audio settings
     setVolume(1);
     setMuted(false);
   }, [setVolume, setMuted]);
 
-  // ---------------------------------
-  // TIMER: aktualizuj czas gry w sekundach
-  // ---------------------------------
+  // --- timer ---
   useEffect(() => {
     if (!roundActive) return;
     const id = setInterval(() => {
-      const secs = Math.floor(
-        (performance.now() - startTimeRef.current) / 1000
-      );
-      setStats((prev) => ({
-        ...prev,
-        seconds: secs,
-      }));
+      const secs = Math.floor((performance.now() - startTimeRef.current) / 1000);
+      setStats((prev) => ({ ...prev, seconds: secs }));
     }, 200);
     return () => clearInterval(id);
   }, [roundActive, setStats]);
 
-  // ---------------------------------
-  // START RUNDY
-  // ---------------------------------
-  function handleStartRound() {
-    if (!selectedFolder) {
-      alert("Wybierz folder najpierw.");
-      return;
-    }
+  // helpers
+  const uid = () => Math.random().toString(36).slice(2);
 
+  function buildVisibleFromPairs(pairs) {
+    const left = pairs.map((p) => ({ uid: `L-${uid()}`, word: p.known, pairId: p.pairId }));
+    const right = pairs.map((p) => ({ uid: `R-${uid()}`, word: p.learn, pairId: p.pairId }));
+    // niezależny shuffle, żeby nie stały „para pod parą”
+    return { left: shuffle(left), right: shuffle(right) };
+  }
+
+  // --- start round ---
+  function handleStartRound() {
+    if (!selectedFolder) { alert("Wybierz folder najpierw."); return; }
     const allPairs = folders[selectedFolder] || [];
-    if (allPairs.length === 0) {
-      alert("Ten folder jest pusty.");
-      return;
-    }
+    if (allPairs.length === 0) { alert("Ten folder jest pusty."); return; }
 
     const req = parseInt(pairCount, 10) || 2;
     const finalCount = clamp(req, 2, allPairs.length);
@@ -119,50 +113,43 @@ function Game() {
     setLastFolder(selectedFolder);
     setLastPairs(finalCount);
 
-    const chosen = shuffle(allPairs).slice(0, finalCount);
+    // twórz kolejkę par na rundę
+    const chosenPairs = shuffle(allPairs).slice(0, finalCount).map((p) => ({
+      pairId: stableId(p.known, p.learn),
+      known: p.known,
+      learn: p.learn,
+    }));
 
-    const left = shuffle(
-      chosen.map((p) => ({
-        word: p.known,
-        pairId: stableId(p.known, p.learn),
-        matched: false,
-      }))
-    );
-    const right = shuffle(
-      chosen.map((p) => ({
-        word: p.learn,
-        pairId: stableId(p.known, p.learn),
-        matched: false,
-      }))
-    );
+    setQueue(chosenPairs);
 
-    setLeftDeck(left);
-    setRightDeck(right);
+    // pierwsze „okno” 5 par
+    const initialPairs = chosenPairs.slice(0, MAX_VISIBLE);
+    queueIdxRef.current = Math.min(MAX_VISIBLE, chosenPairs.length);
+
+    const { left, right } = buildVisibleFromPairs(initialPairs);
+    setLeftVisible(left);
+    setRightVisible(right);
 
     setSelectedLeft(null);
     setSelectedRight(null);
+    setFading({});
+    setAppearing({});
 
     startTimeRef.current = performance.now();
     setRoundActive(true);
-    setIsFinished(false); // start nowej gry -> modal nie pokazuje się
+    setIsFinished(false);
 
-    // reset statystyk
     setStats({
       moves: 0,
       matches: 0,
-      totalPairs: chosen.length,
+      totalPairs: chosenPairs.length,
       seconds: 0,
     });
   }
 
-  // ---------------------------------
-  // KONIEC GRY (wywołujemy, gdy wszystkie pary trafione)
-  // ---------------------------------
+  // --- finish ---
   function finishGameForReal(finalMatches, finalTotalPairs, finalSeconds, finalMoves) {
-    // zatrzymujemy rundę
     setRoundActive(false);
-
-    // utrwalamy końcowe wartości w stats (żeby modal dostał świeży czas/moves)
     setStats((prev) => ({
       ...prev,
       matches: finalMatches,
@@ -170,73 +157,79 @@ function Game() {
       seconds: finalSeconds,
       moves: finalMoves,
     }));
-
-    // pokazujemy modal końca gry
     setIsFinished(true);
   }
 
-  // ---------------------------------
-  // SPRAWDŹ PARĘ kart
-  // ---------------------------------
-  function evaluatePair(leftIdx, rightIdx) {
-    const leftCard = leftDeck[leftIdx];
-    const rightCard = rightDeck[rightIdx];
-
+  // --- evaluate ---
+  function evaluatePair(leftCard, rightCard) {
     const isMatch =
-      leftCard.pairId === rightCard.pairId &&
-      !leftCard.matched &&
-      !rightCard.matched;
+      leftCard &&
+      rightCard &&
+      leftCard.pairId === rightCard.pairId;
 
-    // każdy check pary = +1 ruch
-    setStats((prev) => ({
-      ...prev,
-      moves: prev.moves + 1,
-    }));
+    // +1 ruch
+    setStats((prev) => ({ ...prev, moves: prev.moves + 1 }));
 
     if (isMatch) {
-      // poprawna para
-      const newLeft = [...leftDeck];
-      const newRight = [...rightDeck];
+      playCorrect();
 
-      newLeft[leftIdx] = { ...leftCard, matched: true };
-      newRight[rightIdx] = { ...rightCard, matched: true };
-
-      setLeftDeck(newLeft);
-      setRightDeck(newRight);
-
+      // reset zaznaczeń
       setSelectedLeft(null);
       setSelectedRight(null);
 
-      playCorrect();
+      // 1) fade-out obu kart tej pary
+      setFading((prev) => ({ ...prev, [leftCard.uid]: true, [rightCard.uid]: true }));
 
-      setStats((prev) => {
-        const newMatches = prev.matches + 1;
+      setTimeout(() => {
+        // 2) usuń trafioną parę z widoku
+        setLeftVisible((prev) => prev.filter((c) => c.pairId !== leftCard.pairId));
+        setRightVisible((prev) => prev.filter((c) => c.pairId !== rightCard.pairId));
 
-        // sprawdzamy czy to był ostatni match = KONIEC GRY
-        if (newMatches === prev.totalPairs) {
-          const secondsEnd = Math.floor(
-            (performance.now() - startTimeRef.current) / 1000
-          );
+        // 3) dołóż następną parę z kolejki (utrzymujemy max 5 par)
+        if (queueIdxRef.current < queue.length) {
+          const nextPair = queue[queueIdxRef.current++];
+          const newLeft = { uid: `L-${uid()}`, word: nextPair.known, pairId: nextPair.pairId };
+          const newRight = { uid: `R-${uid()}`, word: nextPair.learn, pairId: nextPair.pairId };
 
-          // UWAGA: tu podmieniamy alert() na nasz modal
-          finishGameForReal(
-            newMatches,
-            prev.totalPairs,
-            secondsEnd,
-            prev.moves + 1 // +1 bo dopiero co zwiększyliśmy moves
-          );
+          setLeftVisible((prev) => {
+            const next = [...prev, newLeft];
+            // mały shuffle, żeby nie zawsze trafiało na koniec
+            return shuffle(next);
+          });
+          setRightVisible((prev) => {
+            const next = [...prev, newRight];
+            return shuffle(next);
+          });
+
+          // 4) fade-in dla nowej pary
+          setAppearing((a) => ({ ...a, [newLeft.uid]: true, [newRight.uid]: true }));
+          setTimeout(() => {
+            setAppearing((a) => {
+              const { [newLeft.uid]: _1, [newRight.uid]: _2, ...rest } = a;
+              return rest;
+            });
+          }, 500);
         }
 
+        // wyczyść znaczniki fade-out
+        setFading((f) => {
+          const { [leftCard.uid]: _a, [rightCard.uid]: _b, ...rest } = f;
+          return rest;
+        });
+      }, 500); // 0.5s fade-out
+
+      // statystyka + ewentualny koniec
+      setStats((prev) => {
+        const newMatches = prev.matches + 1;
+        if (newMatches === prev.totalPairs) {
+          const secondsEnd = Math.floor((performance.now() - startTimeRef.current) / 1000);
+          finishGameForReal(newMatches, prev.totalPairs, secondsEnd, prev.moves + 1);
+        }
         return { ...prev, matches: newMatches };
       });
     } else {
-      // zła para
       playWrong();
-
-      if (mismatchTimeoutRef.current) {
-        clearTimeout(mismatchTimeoutRef.current);
-      }
-
+      if (mismatchTimeoutRef.current) clearTimeout(mismatchTimeoutRef.current);
       mismatchTimeoutRef.current = setTimeout(() => {
         setSelectedLeft(null);
         setSelectedRight(null);
@@ -244,201 +237,155 @@ function Game() {
     }
   }
 
-  // ---------------------------------
-  // KLIK w kartę po lewej
-  // ---------------------------------
+  // --- clicks (na widocznych indeksach) ---
   function onLeftClick(idx) {
     if (!roundActive) return;
-    const card = leftDeck[idx];
-    if (card.matched) return;
+    const card = leftVisible[idx];
+    if (!card) return;
 
     if (selectedLeft === idx) {
       setSelectedLeft(null);
       return;
     }
-
     setSelectedLeft(idx);
 
     if (selectedRight !== null) {
-      evaluatePair(idx, selectedRight);
+      evaluatePair(leftVisible[idx], rightVisible[selectedRight]);
     }
   }
 
-  // ---------------------------------
-  // KLIK w kartę po prawej
-  // ---------------------------------
   function onRightClick(idx) {
     if (!roundActive) return;
-    const card = rightDeck[idx];
-    if (card.matched) return;
+    const card = rightVisible[idx];
+    if (!card) return;
 
     if (selectedRight === idx) {
       setSelectedRight(null);
       return;
     }
-
     setSelectedRight(idx);
 
     if (selectedLeft !== null) {
-      evaluatePair(selectedLeft, idx);
+      evaluatePair(leftVisible[selectedLeft], rightVisible[idx]);
     }
   }
 
-  // ---------------------------------
-  // CALLBACKI do modalowych przycisków
-  // ---------------------------------
+  // --- modal actions ---
   function handlePlayAgain() {
-    // restart tej samej rundy z tymi samymi ustawieniami
-    // po prostu odpalamy handleStartRound znowu
-    handleStartRound();
+    handleStartRound(); // restart z tymi samymi ustawieniami
   }
-
   function handleGoMenu() {
-    navigate("/"); // Home / menu główne
+    navigate("/");
   }
-
   function handleEditWords() {
-    navigate("/mystorage"); // zakładka edycji słówek
+    navigate("/mystorage");
   }
 
-  // ---------------------------------
-  // DANE dla modała końca gry
-  // ---------------------------------
+  // --- stats for modal ---
   const pairsFound = stats.matches || 0;
   const totalPairs = stats.totalPairs || 0;
-  const accuracy =
-    totalPairs > 0 ? Math.round((pairsFound / totalPairs) * 100) : 0;
+  const accuracy = totalPairs > 0 ? Math.round((pairsFound / totalPairs) * 100) : 0;
   const timeSec = stats.seconds || 0;
-
-  const modalStats = {
-    pairsFound,
-    totalPairs,
-    accuracy,
-    timeSec,
-  };
+  const modalStats = { pairsFound, totalPairs, accuracy, timeSec };
 
   return (
     <>
       <main className="board wrap">
-        {/* PANEL USTAWIEŃ RUNDY */}
-        <section className="panel" aria-label="Wybór folderu">
-          <div className="row">
-            <div>
-              <label htmlFor="folder">Wybierz folder</label>
-              <select
-                id="folder"
-                value={selectedFolder}
-                onChange={(e) => setSelectedFolder(e.target.value)}
-                disabled={roundActive} // blokuj zmianę w trakcie gry
-              >
-                {folderNames.length === 0 && (
-                  <option value="">(brak folderów)</option>
-                )}
-                {folderNames.map((name) => (
-                  <option key={name} value={name}>
-                    {name} ({folders[name]?.length || 0})
-                  </option>
-                ))}
-              </select>
-              <div className="hint" id="folder-hint">
-                {folderNames.length
-                  ? "Wybierz folder i kliknij Start."
-                  : 'Brak folderów — dodaj je w zakładce "Dodaj słowa".'}
+        {/* PANEL USTAWIEŃ — widoczny tylko PRZED grą */}
+        {!roundActive && (
+          <section className="panel" aria-label="Wybór folderu">
+            <div className="row">
+              <div>
+                <label htmlFor="folder">Wybierz folder</label>
+                <select
+                  id="folder"
+                  value={selectedFolder}
+                  onChange={(e) => setSelectedFolder(e.target.value)}
+                >
+                  {folderNames.length === 0 && <option value="">(brak folderów)</option>}
+                  {folderNames.map((name) => (
+                    <option key={name} value={name}>
+                      {name} ({folders[name]?.length || 0})
+                    </option>
+                  ))}
+                </select>
+                <div className="hint">
+                  {folderNames.length
+                    ? "Wybierz folder i kliknij Start."
+                    : 'Brak folderów — dodaj je w zakładce "Dodaj słowa".'}
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="pairs-count">Ile par w rundzie?</label>
+                <input
+                  id="pairs-count"
+                  type="number"
+                  min="2"
+                  step="1"
+                  value={pairCount}
+                  onChange={(e) => setPairCount(e.target.value)}
+                />
+                <div className="hint">Zapamiętamy to ustawienie.</div>
+              </div>
+
+              <div>
+                <button className="btn" id="btn-start" onClick={handleStartRound}>
+                  Start ▶
+                </button>
               </div>
             </div>
+          </section>
+        )}
 
-            <div>
-              <label htmlFor="pairs-count">Ile par w rundzie?</label>
-              <input
-                id="pairs-count"
-                type="number"
-                min="2"
-                step="1"
-                value={pairCount}
-                onChange={(e) => setPairCount(e.target.value)}
-                disabled={roundActive} // nie zmieniamy w trakcie gry
-              />
-              <div className="hint">Zapamiętamy to ustawienie.</div>
-            </div>
-
-            <div>
-              <button
-                className="btn"
-                id="btn-start"
-                onClick={handleStartRound}
-                disabled={roundActive}
-              >
-                Start ▶
-              </button>
-            </div>
-
-            {/* DEBUG PRZYCISK: wymuś koniec gry, żeby zobaczyć modal */}
-            <div>
-              <button
-                className="btn ghost"
-                type="button"
-                onClick={() => {
-                  // symulujemy "wszystkie pary znalezione"
-                  finishGameForReal(
-                    5, // trafione pary
-                    5, // łącznie par
-                    42, // sekundy
-                    stats.moves || 12 // ruchy (fallback)
+        {/* PLANSZA — widoczna tylko W TRAKCIE gry */}
+        {roundActive && (
+          <section className="panel" aria-live="polite">
+            <div className="columns">
+              {/* LEWA */}
+              <div className="col" aria-label="Kolumna język 1">
+                {leftVisible.map((card, idx) => {
+                  const isSelected = selectedLeft === idx;
+                  const cls =
+                    "card" +
+                    (isSelected ? " selected" : "") +
+                    (fading[card.uid] ? " fading" : "") +
+                    (appearing[card.uid] ? " appearing" : "");
+                  return (
+                    <button
+                      key={card.uid}
+                      className={cls}
+                      onClick={() => onLeftClick(idx)}
+                    >
+                      {card.word}
+                    </button>
                   );
-                }}
-              >
-                [DEBUG] Pokaż ekran końca gry
-              </button>
-            </div>
-          </div>
-        </section>
+                })}
+              </div>
 
-        {/* PANEL Z KARTAMI GRY */}
-        <section className="panel" aria-live="polite">
-          <div className="columns">
-            {/* LEWA KOLUMNA */}
-            <div className="col" aria-label="Kolumna język 1">
-              {leftDeck.map((card, idx) => {
-                const isSelected = selectedLeft === idx && !card.matched;
-                const cls =
-                  "card" +
-                  (card.matched ? " matched disabled" : "") +
-                  (isSelected ? " selected" : "");
-                return (
-                  <button
-                    key={idx}
-                    className={cls}
-                    onClick={() => onLeftClick(idx)}
-                    disabled={!roundActive}
-                  >
-                    {card.word}
-                  </button>
-                );
-              })}
+              {/* PRAWA */}
+              <div className="col" aria-label="Kolumna język 2">
+                {rightVisible.map((card, idx) => {
+                  const isSelected = selectedRight === idx;
+                  const cls =
+                    "card" +
+                    (isSelected ? " selected" : "") +
+                    (fading[card.uid] ? " fading" : "") +
+                    (appearing[card.uid] ? " appearing" : "");
+                  return (
+                    <button
+                      key={card.uid}
+                      className={cls}
+                      onClick={() => onRightClick(idx)}
+                    >
+                      {card.word}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-
-            {/* PRAWA KOLUMNA */}
-            <div className="col" aria-label="Kolumna język 2">
-              {rightDeck.map((card, idx) => {
-                const isSelected = selectedRight === idx && !card.matched;
-                const cls =
-                  "card" +
-                  (card.matched ? " matched disabled" : "") +
-                  (isSelected ? " selected" : "");
-                return (
-                  <button
-                    key={idx}
-                    className={cls}
-                    onClick={() => onRightClick(idx)}
-                    disabled={!roundActive}
-                  >
-                    {card.word}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </section>
+          </section>
+        )}
       </main>
 
       {/* MODAL KOŃCA GRY */}
@@ -448,14 +395,13 @@ function Game() {
         onPlayAgain={handlePlayAgain}
         onGoMenu={handleGoMenu}
         onEditWords={handleEditWords}
-        variant="green" // "green" sukces vibe, możesz zmienić na "blue"
+        variant="green"
       />
 
-      {/* audio players (niewidoczne) */}
+      {/* audio (ukryte) */}
       {AudioElements}
     </>
   );
 }
 
 export default Game;
-  

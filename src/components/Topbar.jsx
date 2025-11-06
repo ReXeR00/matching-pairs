@@ -28,7 +28,7 @@ function Topbar() {
           </NavLink>
         </nav>
 
-        {/* Statystyki + theme */}
+        {/* Statystyki + theme */} 
         <div className="right">
           <StatsBar />
           <ThemeToggle />

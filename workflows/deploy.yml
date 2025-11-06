@@ -24,7 +24,7 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      # (opcjonalnie) Lint – zostaw, jeśli masz skrypt; inaczej przeskoczy
+      
       - name: Lint (optional)
         run: npm run lint:js || echo "no lint script, skipping"
 
@@ -34,7 +34,7 @@ jobs:
       - name: Deploy 🚀
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          branch: gh-pages         # gdzie publikujemy
-          folder: dist             # Vite buduje do dist (nie build)
-          clean: true              # czyści stary stan gałęzi
+          branch: gh-pages         
+          folder: dist             
+          clean: true              i
           commit-message: 'deploy: vite build'

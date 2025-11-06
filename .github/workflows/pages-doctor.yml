@@ -10,13 +10,12 @@ permissions:
   contents: read
 
 env:
-  PROJECT_DIR: Matching-pairs           
+  PROJECT_DIR: Matching-pairs
   EXPECTED_BASE: "/${{ github.event.repository.name }}/"
 
 jobs:
   doctor:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,15 +25,13 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
 
       - name: Install
-        working-directory: ${{ env.PROJECT_DIR }}
         run: npm ci
+        working-directory: ${{ env.PROJECT_DIR }}
 
       - name: Quick config checks
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
         run: |
           echo "## Pages Doctor — Config" >> $GITHUB_STEP_SUMMARY
           if grep -R --line-number -E "base:\s*['\"]${EXPECTED_BASE}['\"]" vite.config.* >/dev/null 2>&1; then
@@ -47,44 +44,31 @@ jobs:
           else
             echo "❌ Router basename missing (<BrowserRouter basename={import.meta.env.BASE_URL}>)" >> $GITHUB_STEP_SUMMARY
           fi
-
-      - name: Build
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: npm run build
-
-      - name: Inspect build output
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          echo "PWD=$(pwd)"
-          ls -la
-          echo "---- dist ----"
-          ls -la dist || true
-          echo "---- find index.html ----"
-          find . -maxdepth 3 -name "index.html" -print
-
-      - name: Dist sanity check
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
+
+      - name: Build
+        run: npm run build
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Dist sanity check
         run: |
-          set +e
           echo "## Dist checks" >> $GITHUB_STEP_SUMMARY
-          ERR=0
           if [ ! -f dist/index.html ]; then
             echo "❌ dist/index.html missing" >> $GITHUB_STEP_SUMMARY
-            echo "::error ::dist/index.html missing"
-            ERR=1
+            exit 1
           fi
-          if [ -f dist/index.html ] && grep -q "/src/main.jsx" dist/index.html; then
+          if grep -q "/src/main.jsx" dist/index.html; then
             echo "❌ DEV HTML detected (references /src/main.jsx)" >> $GITHUB_STEP_SUMMARY
-            echo "::error ::/src/main.jsx referenced in dist/index.html"
-            ERR=1
+            exit 1
           fi
-          if [ -f dist/index.html ] && ! grep -E -q "assets/.+\.js" dist/index.html; then
+          if ! grep -E -q "assets/.+\.js" dist/index.html; then
             echo "❌ No assets/*.js references — build likely broken" >> $GITHUB_STEP_SUMMARY
-            echo "::error ::no assets/*.js in dist/index.html"
-            ERR=1
+            exit 1
           fi
-          exit $ERR
+          echo "✅ dist looks good" >> $GITHUB_STEP_SUMMARY
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
 
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4

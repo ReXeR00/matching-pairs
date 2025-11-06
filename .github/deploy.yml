@@ -1,4 +1,4 @@
-name: Build and Deploy to GitHub Pages
+name: Deploy to GitHub Pages
 
 on:
   push:
@@ -10,41 +10,46 @@ permissions:
   pages: write
   id-token: write
 
-env:
-
-  PROJECT_DIR: Matching-pairs
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
-      - name: Checkout 🛎️
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node 🔧
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: Matching-pairs/package-lock.json
 
-      - name: Install deps
+      - name: Install
+        working-directory: Matching-pairs
         run: npm ci
-        working-directory: Matching-pairs
 
-      - name: Build 🏗️
+      - name: Build
+        working-directory: Matching-pairs
         run: npm run build
-        working-directory: Matching-pairs
 
-      - name: Upload artifact 📦
-        uses: actions/upload-pages-artifact@v3
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v4
         with:
-          path: Matching-pairs/dist
+          path: Matching-pairs/dist   # ← Vite build: dist
 
-      - name: Deploy 🚀
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4

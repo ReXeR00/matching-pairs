@@ -1,0 +1,76 @@
+# Production release to GitHub Pages.
+#
+# Safety model (all must hold before anything is published):
+#   1. Manual start only (workflow_dispatch) — no push/schedule triggers.
+#   2. Must be run from main, with the confirmation input typed exactly.
+#   3. A fresh build from a clean checkout via the CI workflow (pages-doctor.yml).
+#   4. The deploy job targets the `github-pages` environment; configure
+#      Required reviewers + "main" deployment branch in repo settings so
+#      GitHub also asks the owner to approve each release.
+name: Deploy to GitHub Pages
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy production" to publish main to GitHub Pages'
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: pages-production
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: release guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require main branch and explicit confirmation
+        env:
+          REF: ${{ github.ref }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          fail=0
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::Production deploys are only allowed from refs/heads/main (got $REF)."
+            fail=1
+          fi
+          if [ "$CONFIRM" != "deploy production" ]; then
+            echo "::error::Confirmation input must be exactly: deploy production"
+            fail=1
+          fi
+          exit $fail
+
+  build:
+    name: build (CI)
+    needs: guard
+    if: ${{ github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/pages-doctor.yml
+    permissions:
+      contents: read
+    with:
+      upload-pages-artifact: true
+
+  deploy:
+    name: deploy
+    needs: build
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check Pages is configured for GitHub Actions
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

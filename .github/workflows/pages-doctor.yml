@@ -1,78 +1,76 @@
-name: doctor
+# CI: clean install, config checks, production build, dist checks.
+# Also called by deploy-pages.yml (workflow_call) so production deploys use
+# exactly this build-and-verify path. Never deploys by itself.
+name: CI
+
 on:
-  push:
-    branches: [ main ]
   pull_request:
+    branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      upload-pages-artifact:
+        description: "Also upload dist/ as the GitHub Pages artifact (used by deploy-pages.yml)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-env:
-  PROJECT_DIR: Matching-pairs
-  EXPECTED_BASE: "/${{ github.event.repository.name }}/"
+concurrency:
+  # Called from a deploy, github.workflow is the caller's name, so this group
+  # never cancels a release build.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  doctor:
+  build:
+    name: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPECTED_BASE: "/${{ github.event.repository.name }}/"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 20
+          persist-credentials: false
+
+      - name: Setup Node (from .nvmrc)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
           cache: npm
-          cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
 
-      - name: Install
-        run: npm ci
-        working-directory: ${{ env.PROJECT_DIR }}
-
-      - name: Quick config checks
+      - name: Toolchain versions
         run: |
-          echo "## Pages Doctor — Config" >> $GITHUB_STEP_SUMMARY
-          if grep -R --line-number -E "base:\s*['\"]${EXPECTED_BASE}['\"]" vite.config.* >/dev/null 2>&1; then
-            echo "✅ Vite base OK (${EXPECTED_BASE})" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ Vite base mismatch. Expected: ${EXPECTED_BASE}" >> $GITHUB_STEP_SUMMARY
-          fi
-          if grep -R -n -E "BrowserRouter.*basename=.*import\.meta\.env\.BASE_URL" src >/dev/null 2>&1; then
-            echo "✅ Router basename OK" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ Router basename missing (<BrowserRouter basename={import.meta.env.BASE_URL}>)" >> $GITHUB_STEP_SUMMARY
-          fi
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
+          node --version
+          npm --version
+
+      - name: Install (lockfile only)
+        run: npm ci --no-audit --no-fund
+
+      - name: Config checks
+        run: node scripts/verify-build.mjs config --require-clean
 
       - name: Build
         run: npm run build
-        working-directory: ${{ env.PROJECT_DIR }}
 
-      - name: Dist sanity check
-        run: |
-          echo "## Dist checks" >> $GITHUB_STEP_SUMMARY
-          if [ ! -f dist/index.html ]; then
-            echo "❌ dist/index.html missing" >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
-          if grep -q "/src/main.jsx" dist/index.html; then
-            echo "❌ DEV HTML detected (references /src/main.jsx)" >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
-          if ! grep -E -q "assets/.+\.js" dist/index.html; then
-            echo "❌ No assets/*.js references — build likely broken" >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
-          echo "✅ dist looks good" >> $GITHUB_STEP_SUMMARY
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
+      - name: Dist checks
+        run: node scripts/verify-build.mjs dist
 
-      - name: Upload dist artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload dist (review artifact)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
-          path: ${{ env.PROJECT_DIR }}/dist
+          path: dist
           if-no-files-found: error
           retention-days: 7
+
+      - name: Upload GitHub Pages artifact
+        if: ${{ inputs.upload-pages-artifact }}
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: dist

@@ -6,9 +6,12 @@
   "build": "vite build",
   "preview": "vite preview",
   "sass": "sass --watch src/styles.scss:src/styles.css",
-  "deploy": "gh-pages -d dist",
-  "deploy:check": "npm run build && npx pages-doctor"
+  "deploy": "node -e \"console.error('Manual deploy is disabled. Release via GitHub Actions: Deploy to GitHub Pages (workflow_dispatch on main).');process.exit(1)\"",
+  "deploy:check": "npm run build && node scripts/verify-build.mjs config && node scripts/verify-build.mjs dist"
 },
+  "engines": {
+    "node": ">=24 <25"
+  },
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

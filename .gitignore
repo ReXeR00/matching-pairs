@@ -1,0 +1,29 @@
+# Dependencies (restore with `npm ci` from package-lock.json)
+node_modules/
+
+# Build output (`npm run build`; deployed separately to the gh-pages branch)
+dist/
+dist-ssr/
+
+# Vite caches and temporary config bundles
+.vite/
+*.timestamp-*.mjs
+
+# Local environment and temporary files
+.env
+.env.*
+!.env.example
+*.local
+*.tmp
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.vscode/*
+!.vscode/launch.json
+.idea/
+.DS_Store
+Thumbs.db

@@ -11,7 +11,7 @@ export const STORAGE_KEY = "wordFolders_v2";
 // Starsze nazwy: dane z nich tylko KOPIUJEMY, nigdy nie usuwamy.
 // Ogólny klucz "folders" pominięty celowo — origin rexer00.github.io dzielą
 // inne aplikacje, a ta aplikacja nigdy go nie zapisywała.
-const LEGACY_KEYS = ["wordFolders", "matchbox-folders"];
+export const LEGACY_KEYS = ["wordFolders", "matchbox-folders"];
 // Poprzednia wartość STORAGE_KEY sprzed ostatniego zapisu.
 export const BACKUP_KEY = "mp:backup:wordFolders_v2";
 // Nienaruszone kopie danych, których nie dało się w pełni odczytać.
@@ -41,16 +41,38 @@ function safeGet(key) {
   }
 }
 
+// Powód ostatniego nieudanego zapisu: "quota" | "blocked" | "unverified".
+let lastWriteFailure = null;
+
+function isQuotaError(e) {
+  return !!e && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED" || e.code === 22 || e.code === 1014);
+}
+
 // true tylko gdy wartość faktycznie została zapisana
 function safeSet(key, val) {
+  lastWriteFailure = null;
   const ls = getStorage();
-  if (!ls) return false;
+  if (!ls) {
+    lastWriteFailure = "blocked";
+    return false;
+  }
   try {
     ls.setItem(key, val);
-    return ls.getItem(key) === val;
-  } catch {
-    return false; // quota/full/private mode
+  } catch (e) {
+    lastWriteFailure = isQuotaError(e) ? "quota" : "blocked"; // brak miejsca / tryb prywatny
+    return false;
   }
+  if (safeGet(key) !== val) {
+    lastWriteFailure = "unverified";
+    return false;
+  }
+  return true;
+}
+
+const fail = (error) => ({ ok: false, error, reason: lastWriteFailure });
+
+export function lastWriteFailureReason() {
+  return lastWriteFailure;
 }
 
 function tryParse(json) {
@@ -64,6 +86,19 @@ function tryParse(json) {
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const isValidPair = (p) => isPlainObject(p) && typeof p.known === "string" && typeof p.learn === "string";
 
+// Foldery to słownik: "constructor", "toString" czy "__proto__" są zwykłymi
+// nazwami folderów. Odczyt tylko własnych pól, zapis przez defineProperty
+// (zwykłe przypisanie "__proto__" zmieniłoby prototyp zamiast dodać folder).
+const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
+export function getFolderPairs(folders, name) {
+  return folders && hasOwn(folders, name) && Array.isArray(folders[name]) ? folders[name] : undefined;
+}
+
+function setFolderPairs(folders, name, list) {
+  Object.defineProperty(folders, name, { value: list, writable: true, enumerable: true, configurable: true });
+}
+
 // Zostawia poprawne foldery i pary; liczy pominięte wpisy.
 // Dodatkowe pola par (np. przyszłe id/postępy) są zachowane.
 function sanitize(obj) {
@@ -76,7 +111,7 @@ function sanitize(obj) {
     }
     const good = list.filter(isValidPair);
     skipped += list.length - good.length;
-    folders[name] = good;
+    setFolderPairs(folders, name, good);
   }
   return { folders, skipped };
 }
@@ -97,7 +132,8 @@ export function listRecoveryKeys() {
 }
 
 // Zachowuje nienaruszoną kopię `raw` — tylko raz, bez duplikatów przy każdym ładowaniu.
-function preserveForRecovery(raw) {
+// Zwraca klucz kopii (sprawdzonej odczytem) albo null.
+export function preserveForRecovery(raw) {
   for (const k of listRecoveryKeys()) {
     if (safeGet(k) === raw) return k;
   }
@@ -105,6 +141,12 @@ function preserveForRecovery(raw) {
   let key = base;
   for (let n = 1; safeGet(key) !== null; n++) key = `${base}-${n}`;
   return safeSet(key, raw) ? key : null;
+}
+
+// Ocena danych bez żadnego zapisu: { folders, status, skipped }.
+export function inspectRaw(raw) {
+  const { folders, status, skipped } = fromRaw(raw, { preserve: false });
+  return { folders, status, skipped };
 }
 
 function fromRaw(raw, { preserve }) {
@@ -115,6 +157,36 @@ function fromRaw(raw, { preserve }) {
   const { folders, skipped } = sanitize(parsed.value);
   if (skipped === 0) return { folders, status: "ok", skipped: 0, recoveryKey: null };
   return { folders, status: "partial", skipped, recoveryKey: preserve ? preserveForRecovery(raw) : null };
+}
+
+// Klucze tej aplikacji, z których można odtworzyć słówka (tylko odczyt).
+export function isSnapshotKey(key) {
+  return key === STORAGE_KEY || key === BACKUP_KEY || LEGACY_KEYS.includes(key) || key.startsWith(RECOVERY_PREFIX);
+}
+
+export function readSnapshotRaw(key) {
+  return isSnapshotKey(key) ? safeGet(key) : null;
+}
+
+// Zajętość localStorage w znakach (klucz + wartość): cały origin i ta aplikacja.
+// Origin rexer00.github.io i jego limit dzielą wszystkie strony tego konta.
+export function storageUsage() {
+  const ls = getStorage();
+  if (!ls) return null;
+  let totalChars = 0;
+  let appChars = 0;
+  try {
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k === null) continue;
+      const n = k.length + (ls.getItem(k) || "").length;
+      totalChars += n;
+      if (isSnapshotKey(k) || k.startsWith("mp:") || k.startsWith("mp_")) appChars += n;
+    }
+  } catch {
+    return null;
+  }
+  return { totalChars, appChars };
 }
 
 // --- API ---
@@ -149,7 +221,7 @@ export function loadFolders() {
   return loadFoldersWithStatus().folders;
 }
 
-// Zwraca { ok: true, raw } albo { ok: false, error }.
+// Zwraca { ok: true, raw } albo { ok: false, error, reason? } (reason: "quota" | "blocked" | "unverified").
 // `expected` (opcjonalnie): rewizja, na której oparto zmianę — jeśli w pamięci
 // jest już coś innego (zapis z innej karty), nic nie zapisujemy ("conflict").
 export function saveFolders(folders, { expected } = {}) {
@@ -163,11 +235,11 @@ export function saveFolders(folders, { expected } = {}) {
   if (prev !== null) {
     // dane nieczytelne/częściowe: pełna kopia musi istnieć, zanim je nadpiszemy
     const prevState = fromRaw(prev, { preserve: true });
-    if (prevState.status !== "ok" && !prevState.recoveryKey) return { ok: false, error: "backup-failed" };
-    if (safeGet(BACKUP_KEY) !== prev && !safeSet(BACKUP_KEY, prev)) return { ok: false, error: "backup-failed" };
+    if (prevState.status !== "ok" && !prevState.recoveryKey) return fail("backup-failed");
+    if (safeGet(BACKUP_KEY) !== prev && !safeSet(BACKUP_KEY, prev)) return fail("backup-failed");
   }
 
-  return safeSet(STORAGE_KEY, next) ? { ok: true, raw: next } : { ok: false, error: "write-failed" };
+  return safeSet(STORAGE_KEY, next) ? { ok: true, raw: next } : fail("write-failed");
 }
 
 // Nanosi zmianę na NAJNOWSZE zapisane dane, nigdy na nieaktualną kopię strony.
@@ -184,11 +256,11 @@ export function updateFolders(change, { expected, mine } = {}) {
   // jak przy wejściu na stronę: przykładowy folder tylko przy pustej pamięci
   const folders = loaded.status === "empty" ? ensureDefaults(loaded.folders) : loaded.folders;
   const own = loaded.status === "ok" || loaded.status === "partial" ? parseOwn(mine) : {};
-  const restored = mergeMissing(folders, own);
+  const restored = mergeFolders(folders, own);
   const result = change(folders);
   const stale = expected !== undefined && expected !== loaded.raw;
   const res = saveFolders(folders, { expected: loaded.raw });
-  if (!res.ok) return { ok: false, error: res.error, stale, restored: 0 };
+  if (!res.ok) return { ok: false, error: res.error, reason: res.reason, stale, restored: 0 };
   return { ok: true, folders, raw: res.raw, result, stale, restored };
 }
 
@@ -199,17 +271,18 @@ function parseOwn(mine) {
 
 // Dopisuje do `folders` foldery/pary z `own`, których brakuje (oryginalne obiekty).
 // Zwraca liczbę przywróconych wpisów (pusty folder = 1).
-function mergeMissing(folders, own) {
+export function mergeFolders(folders, own) {
   let restored = 0;
   for (const [name, list] of Object.entries(own)) {
-    if (!Object.prototype.hasOwnProperty.call(folders, name) || !Array.isArray(folders[name])) {
-      folders[name] = list.slice();
+    const have = getFolderPairs(folders, name);
+    if (!have) {
+      setFolderPairs(folders, name, list.slice());
       restored += list.length || 1;
       continue;
     }
-    const ids = new Set(folders[name].map((p) => stableId(p.known, p.learn)));
+    const ids = new Set(have.map((p) => stableId(p.known, p.learn)));
     const lost = list.filter((p) => !ids.has(stableId(p.known, p.learn)));
-    folders[name] = folders[name].concat(lost);
+    setFolderPairs(folders, name, have.concat(lost));
     restored += lost.length;
   }
   return restored;
@@ -224,7 +297,7 @@ function mergeMissing(folders, own) {
 export function reconcileLostWrite(mine) {
   const own = parseOwn(mine);
   const current = loadFoldersWithStatus();
-  const missing = mergeMissing({ ...current.folders }, own); // tylko liczy (płytka kopia)
+  const missing = mergeFolders({ ...current.folders }, own); // tylko liczy (płytka kopia)
   if (missing === 0) return { ok: true, restored: 0 };
   // dane usunięte lub nieczytelne: nie zapisujemy automatycznie
   if (current.status !== "ok" && current.status !== "partial") {
@@ -292,8 +365,8 @@ export function setThemePreference(theme) {
 }
 
 export function ensureFolder(folders, folderName) {
-  if (!folders[folderName]) {
-    folders[folderName] = [];
+  if (!getFolderPairs(folders, folderName)) {
+    setFolderPairs(folders, folderName, []);
   }
   return folders;
 }
@@ -302,7 +375,7 @@ export function ensureFolder(folders, folderName) {
 export function mergePairs(folders, folderName, pairs) {
   ensureFolder(folders, folderName);
   const map = new Map(
-    (folders[folderName] || []).map((p) => [stableId(p.known, p.learn), p])
+    getFolderPairs(folders, folderName).map((p) => [stableId(p.known, p.learn), p])
   );
 
   let added = 0;
@@ -315,7 +388,7 @@ export function mergePairs(folders, folderName, pairs) {
     }
   }
 
-  folders[folderName] = Array.from(map.values());
+  setFolderPairs(folders, folderName, Array.from(map.values()));
   return { added };
 }
 
@@ -324,5 +397,5 @@ export function mergePairs(folders, folderName, pairs) {
 export function mergePairsIntoFolder(folders, folderName, pairs) {
   const { added } = mergePairs(folders, folderName, pairs);
   const res = saveFolders(folders);
-  return { folders, added, saved: res.ok, error: res.error };
+  return { folders, added, saved: res.ok, error: res.error, reason: res.reason };
 }

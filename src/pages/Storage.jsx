@@ -1,6 +1,8 @@
 // src/pages/Storage.jsx
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import StorageNotice from "../components/StorageNotice.jsx";
+import { storageErrorMessage } from "../lib/backup.js";
 import {
   loadFoldersWithStatus,
   updateFolders,
@@ -8,12 +10,10 @@ import {
   subscribeToFolderChanges,
   ensureDefaults,
   getFolderNames,
+  getFolderPairs,
   ensureFolder,
   mergePairs,
 } from "../lib/storage.js";
-
-const SAVE_FAILED =
-  "Nie udało się zapisać — pamięć przeglądarki jest pełna lub zablokowana. Wcześniej zapisane słówka są nienaruszone.";
 const MERGED_NOTE = " (uwzględniono też zmiany zapisane w innej karcie)";
 
 function Storage() {
@@ -24,6 +24,7 @@ function Storage() {
   const [newFolderName, setNewFolderName] = useState("");
   const [storageState, setStorageState] = useState(null);
   const [syncNote, setSyncNote] = useState("");
+  const [saveError, setSaveError] = useState(null);
   // rewizja danych widocznych na stronie i ostatnia wartość zapisana przez tę kartę
   const revisionRef = useRef(null);
   const lastWrittenRef = useRef(null);
@@ -72,7 +73,10 @@ function Storage() {
     if (res.ok) {
       revisionRef.current = res.raw;
       lastWrittenRef.current = res.raw;
+    } else {
+      alert(storageErrorMessage(res));
     }
+    setSaveError(res.ok ? null : res);
     return res;
   }
 
@@ -94,10 +98,7 @@ function Storage() {
     }
 
     const res = applyChange((f) => ensureFolder(f, name));
-    if (!res.ok) {
-      alert(SAVE_FAILED);
-      return;
-    }
+    if (!res.ok) return;
 
     showFolders(res.folders, name);
     setNewFolderName("");
@@ -124,11 +125,8 @@ function Storage() {
     }
 
     const res = applyChange((f) => mergePairs(f, selectedFolder, cleaned));
-    if (!res.ok) {
-      // wpisane słówka zostają w formularzu, żeby można było spróbować ponownie
-      alert(SAVE_FAILED);
-      return;
-    }
+    // przy błędzie wpisane słówka zostają w formularzu, żeby można było spróbować ponownie
+    if (!res.ok) return;
 
     showFolders(res.folders, selectedFolder);
     setRows([{ known: "", learn: "" }]);
@@ -157,6 +155,12 @@ function Storage() {
     <main className="board wrap">
       <section className="panel" aria-label="Dodaj słowa">
         <StorageNotice state={storageState} />
+        {saveError && (
+          <div className="hint" role="status">
+            ⚠️ {storageErrorMessage(saveError)}{" "}
+            {saveError.error !== "unavailable" && <Link to="/settings">Dane i kopia zapasowa →</Link>}
+          </div>
+        )}
         {syncNote && (
           <div className="hint" role="status">
             🔄 {syncNote}
@@ -175,7 +179,7 @@ function Storage() {
             )}
             {folderNames.map((name) => (
               <option key={name} value={name}>
-                {name} ({folders[name]?.length || 0})
+                {name} ({getFolderPairs(folders, name)?.length || 0})
               </option>
             ))}
           </select>

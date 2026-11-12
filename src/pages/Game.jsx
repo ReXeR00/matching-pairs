@@ -13,6 +13,7 @@ import {
   getFolderNames,
   getLastFolder,
   setLastFolder,
+  getFolderPairs,
   getLastPairs,
   setLastPairs,
 } from "../lib/storage.js";
@@ -106,7 +107,7 @@ function Game() {
   // --- start round ---
   function handleStartRound() {
     if (!selectedFolder) { alert("Wybierz folder najpierw."); return; }
-    const allPairs = folders[selectedFolder] || [];
+    const allPairs = getFolderPairs(folders, selectedFolder) || [];
     if (allPairs.length === 0) { alert("Ten folder jest pusty."); return; }
 
     const req = parseInt(pairCount, 10) || 2;
@@ -308,7 +309,7 @@ function Game() {
                   {folderNames.length === 0 && <option value="">(brak folderów)</option>}
                   {folderNames.map((name) => (
                     <option key={name} value={name}>
-                      {name} ({folders[name]?.length || 0})
+                      {name} ({getFolderPairs(folders, name)?.length || 0})
                     </option>
                   ))}
                 </select>

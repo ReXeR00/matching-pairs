@@ -1,4 +1,6 @@
 // src/pages/Settings.jsx
+import DataBackup from "../components/DataBackup.jsx";
+
 function Settings() {
   return (
     <main className="board wrap">
@@ -9,6 +11,7 @@ function Settings() {
           eksport/import całej bazy, profil itd.
         </p>
       </section>
+      <DataBackup />
     </main>
   );
 }

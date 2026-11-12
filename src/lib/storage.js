@@ -19,6 +19,7 @@ export const RECOVERY_PREFIX = "mp:recovery:";
 
 const LAST_FOLDER_KEY = "mp_last_folder";
 const LAST_PAIRS_KEY = "mp_last_pairs";
+const THEME_KEY = "mp_theme";
 
 // --- helpers ---
 function getStorage() {
@@ -119,7 +120,13 @@ function fromRaw(raw, { preserve }) {
 // --- API ---
 
 // status: "ok" | "partial" | "unreadable" | "empty" | "migrated" | "unavailable"
+// raw: dokładna wartość STORAGE_KEY w chwili odczytu (rewizja do wykrywania nieaktualnych kopii)
 export function loadFoldersWithStatus() {
+  const res = loadUnversioned();
+  return { ...res, raw: res.status === "unavailable" ? null : safeGet(STORAGE_KEY) };
+}
+
+function loadUnversioned() {
   if (!getStorage()) return { folders: {}, status: "unavailable", skipped: 0, recoveryKey: null };
 
   const raw = safeGet(STORAGE_KEY);
@@ -142,13 +149,16 @@ export function loadFolders() {
   return loadFoldersWithStatus().folders;
 }
 
-// Zwraca { ok: true } albo { ok: false, error }.
-export function saveFolders(folders) {
+// Zwraca { ok: true, raw } albo { ok: false, error }.
+// `expected` (opcjonalnie): rewizja, na której oparto zmianę — jeśli w pamięci
+// jest już coś innego (zapis z innej karty), nic nie zapisujemy ("conflict").
+export function saveFolders(folders, { expected } = {}) {
   if (!getStorage()) return { ok: false, error: "unavailable" };
 
   const next = JSON.stringify(folders || {});
   const prev = safeGet(STORAGE_KEY);
-  if (prev === next) return { ok: true };
+  if (expected !== undefined && prev !== expected) return { ok: false, error: "conflict" };
+  if (prev === next) return { ok: true, raw: next };
 
   if (prev !== null) {
     // dane nieczytelne/częściowe: pełna kopia musi istnieć, zanim je nadpiszemy
@@ -157,7 +167,83 @@ export function saveFolders(folders) {
     if (safeGet(BACKUP_KEY) !== prev && !safeSet(BACKUP_KEY, prev)) return { ok: false, error: "backup-failed" };
   }
 
-  return safeSet(STORAGE_KEY, next) ? { ok: true } : { ok: false, error: "write-failed" };
+  return safeSet(STORAGE_KEY, next) ? { ok: true, raw: next } : { ok: false, error: "write-failed" };
+}
+
+// Nanosi zmianę na NAJNOWSZE zapisane dane, nigdy na nieaktualną kopię strony.
+// `change(folders)` modyfikuje świeżo odczytane foldery; jego wynik trafia do `result`.
+// `expected`: rewizja, którą widzi strona — `stale: true`, gdy w pamięci jest nowsza
+//   (zmiana z innej karty).
+// `mine`: wszystko, co ta karta już zapisała (poprzednie `raw`); brakujące wpisy
+//   są dopisywane z powrotem (odczyt w tej karcie mógł być nieaktualny).
+// Zwraca { ok, error?, folders, raw, result, stale, restored }.
+export function updateFolders(change, { expected, mine } = {}) {
+  const loaded = loadFoldersWithStatus();
+  if (loaded.status === "unavailable") return { ok: false, error: "unavailable", stale: false, restored: 0 };
+
+  // jak przy wejściu na stronę: przykładowy folder tylko przy pustej pamięci
+  const folders = loaded.status === "empty" ? ensureDefaults(loaded.folders) : loaded.folders;
+  const own = loaded.status === "ok" || loaded.status === "partial" ? parseOwn(mine) : {};
+  const restored = mergeMissing(folders, own);
+  const result = change(folders);
+  const stale = expected !== undefined && expected !== loaded.raw;
+  const res = saveFolders(folders, { expected: loaded.raw });
+  if (!res.ok) return { ok: false, error: res.error, stale, restored: 0 };
+  return { ok: true, folders, raw: res.raw, result, stale, restored };
+}
+
+function parseOwn(mine) {
+  const parsed = mine == null ? { ok: false } : tryParse(mine);
+  return parsed.ok && isPlainObject(parsed.value) ? sanitize(parsed.value).folders : {};
+}
+
+// Dopisuje do `folders` foldery/pary z `own`, których brakuje (oryginalne obiekty).
+// Zwraca liczbę przywróconych wpisów (pusty folder = 1).
+function mergeMissing(folders, own) {
+  let restored = 0;
+  for (const [name, list] of Object.entries(own)) {
+    if (!Object.prototype.hasOwnProperty.call(folders, name) || !Array.isArray(folders[name])) {
+      folders[name] = list.slice();
+      restored += list.length || 1;
+      continue;
+    }
+    const ids = new Set(folders[name].map((p) => stableId(p.known, p.learn)));
+    const lost = list.filter((p) => !ids.has(stableId(p.known, p.learn)));
+    folders[name] = folders[name].concat(lost);
+    restored += lost.length;
+  }
+  return restored;
+}
+
+// Dane są tylko dopisywane (brak usuwania/zmiany nazw w aplikacji), więc
+// wszystko, co ta karta zapisała (`mine`), a czego nie ma w pamięci, zostało
+// nadpisane przez inną kartę. Odczyt tuż przed zapisem nie czyni localStorage
+// atomowym między kartami — to jest siatka bezpieczeństwa na taki wyścig.
+// Zwraca { ok: true, restored, raw? } albo { ok: false, error, missing }.
+// Po przywróceniu `raw` jest nowym `mine` tej karty.
+export function reconcileLostWrite(mine) {
+  const own = parseOwn(mine);
+  const current = loadFoldersWithStatus();
+  const missing = mergeMissing({ ...current.folders }, own); // tylko liczy (płytka kopia)
+  if (missing === 0) return { ok: true, restored: 0 };
+  // dane usunięte lub nieczytelne: nie zapisujemy automatycznie
+  if (current.status !== "ok" && current.status !== "partial") {
+    return { ok: false, error: "unsafe-target", missing };
+  }
+
+  const res = updateFolders(() => {}, { mine });
+  return res.ok ? { ok: true, restored: res.restored, raw: res.raw } : { ok: false, error: res.error, missing };
+}
+
+// Powiadamia o zmianie słówek w innej karcie (zdarzenie "storage").
+// Zwraca funkcję wypisującą; bez obsługi zdarzeń — bezpieczny no-op.
+export function subscribeToFolderChanges(callback) {
+  if (typeof window === "undefined" || typeof window.addEventListener !== "function") return () => {};
+  const onStorage = (e) => {
+    if (e.key === STORAGE_KEY || e.key === null) callback(e);
+  };
+  window.addEventListener("storage", onStorage);
+  return () => window.removeEventListener("storage", onStorage);
 }
 
 // Przykładowy folder tylko do wyświetlenia — zapisze się dopiero,
@@ -196,6 +282,15 @@ export function setLastPairs(n) {
   return safeSet(LAST_PAIRS_KEY, String(n));
 }
 
+// "dark" | "light" | null — nigdy nie rzuca (zablokowana pamięć).
+export function getThemePreference() {
+  const v = safeGet(THEME_KEY);
+  return v === "dark" || v === "light" ? v : null;
+}
+export function setThemePreference(theme) {
+  return safeSet(THEME_KEY, theme === "dark" ? "dark" : "light");
+}
+
 export function ensureFolder(folders, folderName) {
   if (!folders[folderName]) {
     folders[folderName] = [];
@@ -203,8 +298,8 @@ export function ensureFolder(folders, folderName) {
   return folders;
 }
 
-// Zwraca { folders, added, saved, error? } — `saved: false` gdy zapis się nie udał.
-export function mergePairsIntoFolder(folders, folderName, pairs) {
+// Dopisuje pary do folderu (bez zapisu); pomija duplikaty. Zwraca { added }.
+export function mergePairs(folders, folderName, pairs) {
   ensureFolder(folders, folderName);
   const map = new Map(
     (folders[folderName] || []).map((p) => [stableId(p.known, p.learn), p])
@@ -221,6 +316,13 @@ export function mergePairsIntoFolder(folders, folderName, pairs) {
   }
 
   folders[folderName] = Array.from(map.values());
+  return { added };
+}
+
+// Zwraca { folders, added, saved, error? } — `saved: false` gdy zapis się nie udał.
+// Zapisuje przekazaną kopię; strony używają updateFolders (najnowsze dane).
+export function mergePairsIntoFolder(folders, folderName, pairs) {
+  const { added } = mergePairs(folders, folderName, pairs);
   const res = saveFolders(folders);
   return { folders, added, saved: res.ok, error: res.error };
 }

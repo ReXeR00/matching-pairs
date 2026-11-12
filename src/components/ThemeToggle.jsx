@@ -1,15 +1,13 @@
 // src/components/ThemeToggle.jsx
 import { useEffect, useState } from "react";
-
-const THEME_KEY = "mp_theme";
+import { getThemePreference, setThemePreference } from "../lib/storage.js";
 
 function ThemeToggle() {
   const [dark, setDark] = useState(false);
 
-  // przy montowaniu: odczytaj z localStorage
+  // przy montowaniu: odczytaj zapisany motyw (zablokowana pamięć = jasny)
   useEffect(() => {
-    const saved = localStorage.getItem(THEME_KEY);
-    const wantsDark = saved === "dark";
+    const wantsDark = getThemePreference() === "dark";
     setDark(wantsDark);
     document.documentElement.setAttribute(
       "data-theme",
@@ -24,7 +22,7 @@ function ThemeToggle() {
       "data-theme",
       newDark ? "dark" : "light"
     );
-    localStorage.setItem(THEME_KEY, newDark ? "dark" : "light");
+    setThemePreference(newDark ? "dark" : "light"); // błąd zapisu: motyw działa do końca sesji
   }
 
   return (

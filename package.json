@@ -4,6 +4,7 @@
 "scripts": {
   "dev": "vite --open",
   "build": "vite build",
+  "test": "node --test \"tests/**/*.test.mjs\"",
   "preview": "vite preview",
   "sass": "sass --watch src/styles.scss:src/styles.css",
   "deploy": "node -e \"console.error('Manual deploy is disabled. Release via GitHub Actions: Deploy to GitHub Pages (workflow_dispatch on main).');process.exit(1)\"",

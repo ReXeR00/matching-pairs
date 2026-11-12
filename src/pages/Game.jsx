@@ -5,11 +5,11 @@ import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext.jsx";
 import { useGameSounds } from "../hooks/useGameSounds.jsx";
 import GameOverModal from "../components/GameOverModal.jsx";
+import StorageNotice from "../components/StorageNotice.jsx";
 
 import {
-  loadFolders,
+  loadFoldersWithStatus,
   ensureDefaults,
-  saveFolders,
   getFolderNames,
   getLastFolder,
   setLastFolder,
@@ -35,6 +35,7 @@ function Game() {
   const [folderNames, setFolderNames] = useState([]);
   const [selectedFolder, setSelectedFolder] = useState("");
   const [pairCount, setPairCount] = useState(8);
+  const [storageState, setStorageState] = useState(null);
 
   // queue of pairs (cała runda)
   const [queue, setQueue] = useState([]); // [{pairId, known, learn}]
@@ -62,9 +63,10 @@ function Game() {
 
   // --- init folders + audio ---
   useEffect(() => {
-    let f = loadFolders();
-    f = ensureDefaults(f);
-    saveFolders(f);
+    // odczyt bez zapisu; przykładowy folder tylko przy pustej pamięci
+    const loaded = loadFoldersWithStatus();
+    const f = loaded.status === "empty" ? ensureDefaults(loaded.folders) : loaded.folders;
+    setStorageState(loaded);
 
     const names = getFolderNames(f);
     const last = getLastFolder();
@@ -294,6 +296,7 @@ function Game() {
         {/* PANEL USTAWIEŃ — widoczny tylko PRZED grą */}
         {!roundActive && (
           <section className="panel" aria-label="Wybór folderu">
+            <StorageNotice state={storageState} />
             <div className="row">
               <div>
                 <label htmlFor="folder">Wybierz folder</label>

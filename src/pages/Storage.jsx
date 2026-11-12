@@ -1,7 +1,8 @@
 // src/pages/Storage.jsx
 import { useEffect, useState } from "react";
+import StorageNotice from "../components/StorageNotice.jsx";
 import {
-  loadFolders,
+  loadFoldersWithStatus,
   saveFolders,
   ensureDefaults,
   getFolderNames,
@@ -9,17 +10,22 @@ import {
   mergePairsIntoFolder,
 } from "../lib/storage.js";
 
+const SAVE_FAILED =
+  "Nie udało się zapisać — pamięć przeglądarki jest pełna lub zablokowana. Wcześniej zapisane słówka są nienaruszone.";
+
 function Storage() {
   const [folders, setFolders] = useState({});
   const [folderNames, setFolderNames] = useState([]);
   const [selectedFolder, setSelectedFolder] = useState("");
   const [rows, setRows] = useState([{ known: "", learn: "" }]);
   const [newFolderName, setNewFolderName] = useState("");
+  const [storageState, setStorageState] = useState(null);
 
   useEffect(() => {
-    let f = loadFolders();
-    f = ensureDefaults(f);
-    saveFolders(f);
+    // odczyt bez zapisu; przykładowy folder tylko przy pustej pamięci
+    const loaded = loadFoldersWithStatus();
+    const f = loaded.status === "empty" ? ensureDefaults(loaded.folders) : loaded.folders;
+    setStorageState(loaded);
 
     const names = getFolderNames(f);
     setFolders(f);
@@ -48,7 +54,11 @@ function Storage() {
 
     const clone = { ...folders };
     ensureFolder(clone, name);
-    saveFolders(clone);
+    const res = saveFolders(clone);
+    if (!res.ok) {
+      alert(SAVE_FAILED);
+      return;
+    }
 
     const names = getFolderNames(clone);
     setFolders(clone);
@@ -79,6 +89,11 @@ function Storage() {
 
     const clone = { ...folders };
     const res = mergePairsIntoFolder(clone, selectedFolder, cleaned);
+    if (!res.saved) {
+      // wpisane słówka zostają w formularzu, żeby można było spróbować ponownie
+      alert(SAVE_FAILED);
+      return;
+    }
 
     setFolders(res.folders);
     setRows([{ known: "", learn: "" }]);
@@ -106,6 +121,7 @@ function Storage() {
   return (
     <main className="board wrap">
       <section className="panel" aria-label="Dodaj słowa">
+        <StorageNotice state={storageState} />
         {/* wybór / tworzenie folderu */}
         <div className="stack">
           <label htmlFor="edit-folder">Folder docelowy</label>

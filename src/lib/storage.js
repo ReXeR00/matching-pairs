@@ -1,97 +1,170 @@
 // src/lib/storage.js
+// Zasada: nigdy nie usuwamy ani nie nadpisujemy danych użytkownika bez kopii.
+// - odczyt nie zapisuje niczego (poza jednorazową kopią danych nieczytelnych),
+// - każdy zapis najpierw zachowuje poprzednią wartość (BACKUP_KEY),
+// - błędy zapisu są zwracane wywołującemu ({ ok: false }).
 import { stableId } from "./utils.js";
 
-// --- klucze (nowy + stare do migracji) ---
-const STORAGE_KEY = "wordFolders_v2";
-const LEGACY_KEYS = ["wordFolders", "matchbox-folders", "folders"];
+// --- klucze ---
+// Jedyny klucz zapisywany przez aplikację od pierwszej wersji (3817b87).
+export const STORAGE_KEY = "wordFolders_v2";
+// Starsze nazwy: dane z nich tylko KOPIUJEMY, nigdy nie usuwamy.
+// Ogólny klucz "folders" pominięty celowo — origin rexer00.github.io dzielą
+// inne aplikacje, a ta aplikacja nigdy go nie zapisywała.
+const LEGACY_KEYS = ["wordFolders", "matchbox-folders"];
+// Poprzednia wartość STORAGE_KEY sprzed ostatniego zapisu.
+export const BACKUP_KEY = "mp:backup:wordFolders_v2";
+// Nienaruszone kopie danych, których nie dało się w pełni odczytać.
+export const RECOVERY_PREFIX = "mp:recovery:";
 
 const LAST_FOLDER_KEY = "mp_last_folder";
 const LAST_PAIRS_KEY = "mp_last_pairs";
 
 // --- helpers ---
-function hasLocalStorage() {
+function getStorage() {
   try {
-    return typeof window !== "undefined" && "localStorage" in window;
+    if (typeof window === "undefined") return null;
+    return window.localStorage || null; // sam dostęp może rzucić (zablokowane dane witryny)
   } catch {
-    return false;
+    return null;
   }
 }
 
 function safeGet(key) {
-  if (!hasLocalStorage()) return null;
+  const ls = getStorage();
+  if (!ls) return null;
   try {
-    return localStorage.getItem(key);
+    return ls.getItem(key);
   } catch {
     return null;
   }
 }
 
+// true tylko gdy wartość faktycznie została zapisana
 function safeSet(key, val) {
-  if (!hasLocalStorage()) return;
+  const ls = getStorage();
+  if (!ls) return false;
   try {
-    localStorage.setItem(key, val);
+    ls.setItem(key, val);
+    return ls.getItem(key) === val;
   } catch {
-    // quota/full/private mode – ignorujemy
+    return false; // quota/full/private mode
   }
-}
-
-function isValidFolders(obj) {
-  if (!obj || typeof obj !== "object") return false;
-  // oczekujemy: { [folderName]: Array<{known, learn}> }
-  for (const [k, v] of Object.entries(obj)) {
-    if (!Array.isArray(v)) return false;
-    for (const p of v) {
-      if (!p || typeof p !== "object") return false;
-      if (typeof p.known !== "string" || typeof p.learn !== "string") return false;
-    }
-  }
-  return true;
 }
 
 function tryParse(json) {
   try {
-    return JSON.parse(json);
+    return { ok: true, value: JSON.parse(json) };
   } catch {
-    return null;
+    return { ok: false };
   }
+}
+
+const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const isValidPair = (p) => isPlainObject(p) && typeof p.known === "string" && typeof p.learn === "string";
+
+// Zostawia poprawne foldery i pary; liczy pominięte wpisy.
+// Dodatkowe pola par (np. przyszłe id/postępy) są zachowane.
+function sanitize(obj) {
+  const folders = {};
+  let skipped = 0;
+  for (const [name, list] of Object.entries(obj)) {
+    if (!Array.isArray(list)) {
+      skipped++;
+      continue;
+    }
+    const good = list.filter(isValidPair);
+    skipped += list.length - good.length;
+    folders[name] = good;
+  }
+  return { folders, skipped };
+}
+
+export function listRecoveryKeys() {
+  const ls = getStorage();
+  if (!ls) return [];
+  const keys = [];
+  try {
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k && k.startsWith(RECOVERY_PREFIX)) keys.push(k);
+    }
+  } catch {
+    return [];
+  }
+  return keys.sort();
+}
+
+// Zachowuje nienaruszoną kopię `raw` — tylko raz, bez duplikatów przy każdym ładowaniu.
+function preserveForRecovery(raw) {
+  for (const k of listRecoveryKeys()) {
+    if (safeGet(k) === raw) return k;
+  }
+  const base = `${RECOVERY_PREFIX}${STORAGE_KEY}:${new Date().toISOString()}`;
+  let key = base;
+  for (let n = 1; safeGet(key) !== null; n++) key = `${base}-${n}`;
+  return safeSet(key, raw) ? key : null;
+}
+
+function fromRaw(raw, { preserve }) {
+  const parsed = tryParse(raw);
+  if (!parsed.ok || !isPlainObject(parsed.value)) {
+    return { folders: {}, status: "unreadable", skipped: 0, recoveryKey: preserve ? preserveForRecovery(raw) : null };
+  }
+  const { folders, skipped } = sanitize(parsed.value);
+  if (skipped === 0) return { folders, status: "ok", skipped: 0, recoveryKey: null };
+  return { folders, status: "partial", skipped, recoveryKey: preserve ? preserveForRecovery(raw) : null };
 }
 
 // --- API ---
-export function loadFolders() {
-  // 1) spróbuj nowy klucz
-  const raw = safeGet(STORAGE_KEY);
-  if (raw) {
-    const obj = tryParse(raw);
-    if (isValidFolders(obj)) return obj;
-    // uszkodzony wpis -> czyścimy, żeby nie wysypywać się w kółko
-    try { localStorage.removeItem(STORAGE_KEY); } catch {}
-  }
 
-  // 2) migracja legacy kluczy (pierwszy, który zadziała)
+// status: "ok" | "partial" | "unreadable" | "empty" | "migrated" | "unavailable"
+export function loadFoldersWithStatus() {
+  if (!getStorage()) return { folders: {}, status: "unavailable", skipped: 0, recoveryKey: null };
+
+  const raw = safeGet(STORAGE_KEY);
+  if (raw !== null) return fromRaw(raw, { preserve: true });
+
+  // brak danych w nowym kluczu -> kopia ze starszych kluczy (bez usuwania)
   for (const key of LEGACY_KEYS) {
     const legacyRaw = safeGet(key);
-    if (!legacyRaw) continue;
-    const legacyObj = tryParse(legacyRaw);
-    if (isValidFolders(legacyObj)) {
-      // zapisz w nowym formacie i zwróć
-      saveFolders(legacyObj);
-      // opcjonalnie usuń stary
-      try { localStorage.removeItem(key); } catch {}
-      return legacyObj;
+    if (legacyRaw === null) continue;
+    const res = fromRaw(legacyRaw, { preserve: false });
+    if (res.status === "ok" || res.status === "partial") {
+      return { ...res, status: "migrated", migratedFrom: key };
     }
   }
 
-  // 3) brak danych lub niepoprawne
-  return {};
+  return { folders: {}, status: "empty", skipped: 0, recoveryKey: null };
 }
 
+export function loadFolders() {
+  return loadFoldersWithStatus().folders;
+}
+
+// Zwraca { ok: true } albo { ok: false, error }.
 export function saveFolders(folders) {
-  safeSet(STORAGE_KEY, JSON.stringify(folders || {}));
+  if (!getStorage()) return { ok: false, error: "unavailable" };
+
+  const next = JSON.stringify(folders || {});
+  const prev = safeGet(STORAGE_KEY);
+  if (prev === next) return { ok: true };
+
+  if (prev !== null) {
+    // dane nieczytelne/częściowe: pełna kopia musi istnieć, zanim je nadpiszemy
+    const prevState = fromRaw(prev, { preserve: true });
+    if (prevState.status !== "ok" && !prevState.recoveryKey) return { ok: false, error: "backup-failed" };
+    if (safeGet(BACKUP_KEY) !== prev && !safeSet(BACKUP_KEY, prev)) return { ok: false, error: "backup-failed" };
+  }
+
+  return safeSet(STORAGE_KEY, next) ? { ok: true } : { ok: false, error: "write-failed" };
 }
 
+// Przykładowy folder tylko do wyświetlenia — zapisze się dopiero,
+// gdy użytkownik sam coś zapisze.
 export function ensureDefaults(folders) {
   if (!folders || Object.keys(folders).length === 0) {
-    const defaults = {
+    return {
       "Przykład": [
         { known: "cat",   learn: "kot" },
         { known: "dog",   learn: "pies" },
@@ -99,9 +172,6 @@ export function ensureDefaults(folders) {
         { known: "car",   learn: "samochód" },
       ],
     };
-    // od razu zapisz, żeby UI miał dane nawet na Pages
-    saveFolders(defaults);
-    return defaults;
   }
   return folders;
 }
@@ -114,7 +184,7 @@ export function getLastFolder() {
   return safeGet(LAST_FOLDER_KEY) || null;
 }
 export function setLastFolder(name) {
-  safeSet(LAST_FOLDER_KEY, String(name ?? ""));
+  return safeSet(LAST_FOLDER_KEY, String(name ?? ""));
 }
 
 export function getLastPairs() {
@@ -123,7 +193,7 @@ export function getLastPairs() {
   return Number.isNaN(n) ? null : n;
 }
 export function setLastPairs(n) {
-  safeSet(LAST_PAIRS_KEY, String(n));
+  return safeSet(LAST_PAIRS_KEY, String(n));
 }
 
 export function ensureFolder(folders, folderName) {
@@ -133,6 +203,7 @@ export function ensureFolder(folders, folderName) {
   return folders;
 }
 
+// Zwraca { folders, added, saved, error? } — `saved: false` gdy zapis się nie udał.
 export function mergePairsIntoFolder(folders, folderName, pairs) {
   ensureFolder(folders, folderName);
   const map = new Map(
@@ -150,16 +221,6 @@ export function mergePairsIntoFolder(folders, folderName, pairs) {
   }
 
   folders[folderName] = Array.from(map.values());
-  saveFolders(folders);
-  return { folders, added };
-}
-
-// OPTIONAL: szybkie czyszczenie przy debugowaniu
-export function resetAllStorage() {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(LAST_FOLDER_KEY);
-    localStorage.removeItem(LAST_PAIRS_KEY);
-    for (const k of LEGACY_KEYS) localStorage.removeItem(k);
-  } catch {}
+  const res = saveFolders(folders);
+  return { folders, added, saved: res.ok, error: res.error };
 }

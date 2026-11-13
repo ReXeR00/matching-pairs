@@ -16,6 +16,8 @@ export default function GameOverModal({
     pairsFound = 0,
     totalPairs = 0,
     accuracy = 0,
+    attempts = 0,
+    wrong = 0,
     timeSec = 0,
   } = stats;
 
@@ -87,6 +89,8 @@ export default function GameOverModal({
                 <strong>
                   {pairsFound}/{totalPairs}
                 </strong>
+                <br />
+                • Próby: <strong>{attempts}</strong> (błędne: {wrong})
                 <br />
                 • Skuteczność:{" "}
                 <strong>{accuracy}%</strong>

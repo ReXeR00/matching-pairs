@@ -2,7 +2,7 @@
 // Dane i kopia zapasowa: eksport, import, lista kopii, podgląd i przywracanie.
 // Przywracanie tylko po potwierdzeniu; obecne dane są najpierw zachowywane.
 import { useEffect, useState } from "react";
-import { STORAGE_KEY, storageUsage, subscribeToFolderChanges } from "../lib/storage.js";
+import { STORAGE_KEY, storageUsage, subscribeToFolderChanges, repairAfterRestore } from "../lib/storage.js";
 import {
   listSnapshots,
   createExport,
@@ -41,7 +41,11 @@ function DataBackup() {
 
   useEffect(() => {
     refresh();
-    return subscribeToFolderChanges(refresh);
+    // zmiana w innej karcie: najpierw ochrona przywróconych danych i zgubionych zapisów
+    return subscribeToFolderChanges((e) => {
+      repairAfterRestore({ seen: e.key === STORAGE_KEY ? [e.newValue] : [] });
+      refresh();
+    });
   }, []);
 
   const current = snapshots.find((s) => s.kind === "current");

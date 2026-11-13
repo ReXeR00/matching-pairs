@@ -42,6 +42,12 @@ npx playwright test e2e/multitab.spec.mjs # one file
 npx playwright show-trace test-results/<test>/trace.zip   # inspect a failure
 ```
 
+Stress suites included in the run: `e2e/multitab.spec.mjs` (concurrent saves) and
+`e2e/restore-race.spec.mjs` (replace restores racing concurrent saves; set `RACE_LIB_DIR` to
+another copy of `src/lib` to measure older code). Deterministic orderings of the same races are
+unit-tested in `tests/restore-race.test.mjs` with a per-tab cache model
+(`tests/helpers/multi-tab-storage.mjs`).
+
 To look at the build the way GitHub Pages serves it: `npm run build && npm run preview:pages`,
 then open <http://127.0.0.1:4173/matching-pairs/>.
 

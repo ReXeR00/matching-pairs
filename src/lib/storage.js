@@ -141,7 +141,8 @@ export function preserveForRecovery(raw) {
   for (const k of listRecoveryKeys()) {
     if (safeGet(k) === raw) return k;
   }
-  const base = `${RECOVERY_PREFIX}${STORAGE_KEY}:${new Date().toISOString()}`;
+  // losowy przyrostek: dwie karty zapisujące kopię w tej samej milisekundzie nie nadpiszą sobie kopii
+  const base = `${RECOVERY_PREFIX}${STORAGE_KEY}:${new Date().toISOString()}-${Math.random().toString(36).slice(2, 8)}`;
   let key = base;
   for (let n = 1; safeGet(key) !== null; n++) key = `${base}-${n}`;
   return safeSet(key, raw) ? key : null;
@@ -224,9 +225,80 @@ export function loadFoldersWithStatus() {
 }
 
 // Rozpoczyna nową generację danych (przed zapisem przywróconej kopii).
-export function startNewGeneration() {
-  const epoch = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  return safeSet(EPOCH_KEY, epoch) ? { ok: true, epoch } : { ok: false, reason: lastWriteFailure };
+// Zapis jest JEDNĄ wartością (atomową): id generacji + klucze kopii z danymi
+// zastąpionymi (`replaced`) i przywróconymi (`restored`). Dzięki temu każda
+// karta odróżnia świadomie zastąpione słówka od zapisów zrobionych w trakcie
+// przywracania i może naprawić nadpisanie przez kartę z nieaktualnym odczytem.
+export function startNewGeneration({ replacedKey = null, restoredKey = null } = {}) {
+  const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const value = JSON.stringify({ id, replaced: replacedKey, restored: restoredKey });
+  return safeSet(EPOCH_KEY, value) ? { ok: true, epoch: value } : { ok: false, reason: lastWriteFailure };
+}
+
+export function readGenerationRaw() {
+  return safeGet(EPOCH_KEY);
+}
+
+// Opis generacji z wartości EPOCH_KEY (stary format FIX 007: samo id).
+export function readGeneration(epoch) {
+  if (epoch == null) return null;
+  const parsed = tryParse(epoch);
+  if (parsed.ok && isPlainObject(parsed.value) && typeof parsed.value.id === "string") {
+    const { id, replaced = null, restored = null } = parsed.value;
+    return { id, replaced: typeof replaced === "string" ? replaced : null, restored: typeof restored === "string" ? restored : null };
+  }
+  return { id: epoch, replaced: null, restored: null };
+}
+
+// Foldery z kopii odzyskiwania (null, gdy kopii brak lub jest nieczytelna).
+function copyFolders(key) {
+  if (!key || !key.startsWith(RECOVERY_PREFIX)) return null;
+  const raw = safeGet(key);
+  if (raw === null) return null;
+  const res = fromRaw(raw, { preserve: false });
+  return res.status === "ok" || res.status === "partial" ? res.folders : null;
+}
+
+// Pary/foldery z `a`, których nie ma w `b` (wg stableId). Nie zmienia argumentów.
+function subtractFolders(a, b) {
+  const out = {};
+  for (const [name, list] of Object.entries(a)) {
+    const have = getFolderPairs(b, name);
+    if (!have) {
+      setFolderPairs(out, name, list.slice());
+      continue;
+    }
+    const ids = new Set(have.map((x) => stableId(x.known, x.learn)));
+    const extra = list.filter((x) => !ids.has(stableId(x.known, x.learn)));
+    if (extra.length) setFolderPairs(out, name, extra);
+  }
+  return out;
+}
+
+function cloneFolders(f) {
+  const out = {};
+  for (const [name, list] of Object.entries(f)) setFolderPairs(out, name, list.slice());
+  return out;
+}
+
+// Podstawa zapisu z uwzględnieniem ostatniego przywrócenia ("zastąp").
+// Słówka są tylko dopisywane, więc brak któregoś PRZYWRÓCONEGO słówka oznacza,
+// że karta z nieaktualnym odczytem nadpisała przywrócone dane. Wtedy:
+//   przywrócone ∪ (obecne − zastąpione)
+// czyli nowe zapisy zostają, a świadomie zastąpione słówka nie wracają.
+// Obecna wartość jest wcześniej zachowywana w kopii odzyskiwania.
+function restoreAwareBase(loaded) {
+  const gen = readGeneration(loaded.epoch);
+  const usable = loaded.status === "ok" || loaded.status === "partial";
+  const replaced = (gen && copyFolders(gen.replaced)) || {};
+  const restoredSnap = gen && usable ? copyFolders(gen.restored) : null;
+  const missingRestored = restoredSnap ? mergeFolders({ ...loaded.folders }, restoredSnap) : 0;
+  if (missingRestored > 0) {
+    const folders = cloneFolders(restoredSnap);
+    mergeFolders(folders, subtractFolders(loaded.folders, replaced));
+    return { folders, replaced, repairedFrom: loaded.raw, repaired: missingRestored };
+  }
+  return { folders: loaded.folders, replaced, repairedFrom: null, repaired: 0 };
 }
 
 function loadUnversioned() {
@@ -284,18 +356,50 @@ export function saveFolders(folders, { expected } = {}) {
 // Zwraca { ok, error?, folders, raw, epoch, result, stale, restored, superseded }.
 export function updateFolders(change, { expected, mine, epoch } = {}) {
   const loaded = loadFoldersWithStatus();
-  if (loaded.status === "unavailable") return { ok: false, error: "unavailable", stale: false, restored: 0, superseded: false };
+  if (loaded.status === "unavailable") return { ok: false, error: "unavailable", stale: false, restored: 0, superseded: false, repaired: 0 };
 
+  const base = restoreAwareBase(loaded);
   // jak przy wejściu na stronę: przykładowy folder tylko przy pustej pamięci
-  const folders = loaded.status === "empty" ? ensureDefaults(loaded.folders) : loaded.folders;
+  const folders = loaded.status === "empty" ? ensureDefaults(base.folders) : base.folders;
+  // po przywróceniu w innej karcie: z własnych zapisów wracają tylko te,
+  // których przywracająca karta nie widziała (nie ma ich w danych zastąpionych)
   const superseded = mine != null && (epoch ?? null) !== loaded.epoch;
-  const own = !superseded && (loaded.status === "ok" || loaded.status === "partial") ? parseOwn(mine) : {};
+  const usable = loaded.status === "ok" || loaded.status === "partial";
+  const own = usable ? (superseded ? subtractFolders(parseOwn(mine), base.replaced) : parseOwn(mine)) : {};
   const restored = mergeFolders(folders, own);
   const result = change(folders);
   const stale = expected !== undefined && expected !== loaded.raw;
+  if (base.repairedFrom !== null && !preserveForRecovery(base.repairedFrom)) {
+    return { ok: false, error: "recovery-failed", reason: lastWriteFailure, stale, restored: 0, superseded, repaired: 0 };
+  }
   const res = saveFolders(folders, { expected: loaded.raw });
-  if (!res.ok) return { ok: false, error: res.error, reason: res.reason, stale, restored: 0, superseded };
-  return { ok: true, folders, raw: res.raw, epoch: loaded.epoch, result, stale, restored, superseded };
+  if (!res.ok) return { ok: false, error: res.error, reason: res.reason, stale, restored: 0, superseded, repaired: 0 };
+  return { ok: true, folders, raw: res.raw, epoch: loaded.epoch, result, stale, restored, superseded, repaired: base.repaired };
+}
+
+// Wywoływane przez każdą stronę po zdarzeniu "storage" (zmiana w innej karcie).
+// 1) naprawia nadpisanie przywróconych danych przez kartę z nieaktualnym odczytem,
+// 2) `seen` — wartości słówek zapisane przez inne karty (event.newValue): słówka,
+//    których nie ma teraz ani w danych świadomie zastąpionych przez ostatnie
+//    przywrócenie, zostały zgubione w wyścigu zapisów — dopisujemy je z powrotem
+//    (działa także wtedy, gdy karta, która je zapisała, jest już zamknięta).
+// Gdy nic nie trzeba poprawiać — nic nie zapisuje.
+// Zwraca { ok: true, repaired, rescued, raw?, epoch? } albo { ok: false, error }.
+export function repairAfterRestore({ seen = [] } = {}) {
+  const loaded = loadFoldersWithStatus();
+  if (loaded.status !== "ok" && loaded.status !== "partial") return { ok: true, repaired: 0, rescued: 0 };
+  const base = restoreAwareBase(loaded);
+  const lost = {};
+  for (const raw of seen) {
+    if (typeof raw !== "string") continue;
+    mergeFolders(lost, subtractFolders(subtractFolders(parseOwn(raw), base.replaced), base.folders));
+  }
+  const rescued = mergeFolders({ ...base.folders }, lost);
+  if (base.repaired === 0 && rescued === 0) return { ok: true, repaired: 0, rescued: 0 };
+  const res = updateFolders((f) => mergeFolders(f, lost));
+  return res.ok
+    ? { ok: true, repaired: res.repaired, rescued, raw: res.raw, epoch: res.epoch }
+    : { ok: false, error: res.error, reason: res.reason };
 }
 
 function parseOwn(mine) {
@@ -333,7 +437,17 @@ export function reconcileLostWrite(mine, { epoch } = {}) {
   const own = parseOwn(mine);
   const current = loadFoldersWithStatus();
   if (mine != null && (epoch ?? null) !== current.epoch) {
-    return { ok: true, restored: 0, superseded: true, epoch: current.epoch };
+    // przywrócono kopię w innej karcie: zostają tylko zapisy, których tamta karta nie widziała
+    const base = restoreAwareBase(current);
+    const kept = mergeFolders({ ...base.folders }, subtractFolders(own, base.replaced));
+    if (kept === 0 && base.repaired === 0) return { ok: true, restored: 0, superseded: true, epoch: current.epoch };
+    if (current.status !== "ok" && current.status !== "partial") {
+      return { ok: false, error: "unsafe-target", missing: kept, superseded: true };
+    }
+    const res = updateFolders(() => {}, { mine, epoch });
+    return res.ok
+      ? { ok: true, restored: res.restored, repaired: res.repaired, superseded: true, raw: res.raw, epoch: res.epoch }
+      : { ok: false, error: res.error, missing: kept, superseded: true };
   }
   const missing = mergeFolders({ ...current.folders }, own); // tylko liczy (płytka kopia)
   if (missing === 0) return { ok: true, restored: 0 };

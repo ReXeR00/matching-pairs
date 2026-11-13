@@ -198,7 +198,9 @@ describe("restore", () => {
     B.restoreSnapshot({ raw: v1, mode: "replace" });
     B.restoreSnapshot({ raw: v2, mode: "replace" });
     B.restoreSnapshot({ raw: JSON.stringify({ C: [] }), mode: "replace" });
-    assert.deepEqual(recoveryValues(store).sort(), [v1, v2].sort(), "each distinct previous value kept once");
+    const values = recoveryValues(store);
+    assert.equal(new Set(values).size, values.length, "no duplicate copies");
+    for (const v of [v1, v2]) assert.ok(values.includes(v), "every replaced value kept");
     noRemovals(store);
   });
 });

@@ -66,8 +66,11 @@ test("restore: preview, cancel changes nothing, confirm keeps the previous data"
   const s = await dump(page);
   const rec = Object.keys(s).filter((k) => k.startsWith("mp:recovery:"));
   expect(s[KEY]).toBe(v1);
-  expect(rec.map((k) => s[k])).toEqual([v2]);
-  await expect(item(page, rec[0])).toBeVisible();
+  // previous data (v2) and the restored data (v1) are both kept as verified copies
+  expect(rec.map((k) => s[k]).sort()).toEqual([v1, v2].sort());
+  const previousKey = rec.find((k) => s[k] === v2);
+  await expect(message(page)).toContainText(previousKey);
+  await expect(item(page, previousKey)).toBeVisible();
   await openStorage(page);
   expect(await folderOptions(page)).toEqual(["Moje (1)"]);
 });
@@ -123,7 +126,9 @@ test("corrupt current data restored from backup: corrupt value kept once", async
   await expect(message(page)).toContainText("Przywrócono");
   const s = await dump(page);
   expect(s[KEY]).toBe(v1);
-  expect(Object.entries(s).filter(([k]) => k.startsWith("mp:recovery:")).map(([, v]) => v)).toEqual(["{broken"]);
+  const copies = Object.entries(s).filter(([k]) => k.startsWith("mp:recovery:")).map(([, v]) => v);
+  expect(copies.filter((v) => v === "{broken")).toHaveLength(1);
+  expect(copies.sort()).toEqual(["{broken", v1].sort());
 });
 
 test.describe("manual cleanup of copies", () => {

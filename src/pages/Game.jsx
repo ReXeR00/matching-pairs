@@ -1,4 +1,6 @@
 // src/pages/Game.jsx
+// Widok rundy. Cała logika gry (zaznaczenia, próby, punktacja, koniec rundy)
+// jest w lib/gameEngine.js; tutaj tylko render, dźwięki i timery.
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -8,6 +10,7 @@ import GameOverModal from "../components/GameOverModal.jsx";
 import StorageNotice from "../components/StorageNotice.jsx";
 
 import {
+  STORAGE_KEY,
   loadFoldersWithStatus,
   ensureDefaults,
   getFolderNames,
@@ -16,15 +19,15 @@ import {
   getFolderPairs,
   getLastPairs,
   setLastPairs,
+  subscribeToFolderChanges,
+  repairAfterRestore,
 } from "../lib/storage.js";
-
-import { clamp, shuffle, stableId } from "../lib/utils.js";
-
-const MAX_VISIBLE = 5;
+import { createIdleState, step, roundStats, isHighlighted } from "../lib/gameEngine.js";
+import { random } from "../lib/utils.js";
 
 function Game() {
   // global stats
-  const { stats, setStats } = useGame();
+  const { setStats } = useGame();
   // sounds
   const { playCorrect, playWrong, setVolume, setMuted, AudioElements } =
     useGameSounds();
@@ -38,71 +41,85 @@ function Game() {
   const [pairCount, setPairCount] = useState(8);
   const [storageState, setStorageState] = useState(null);
 
-  // queue of pairs (cała runda)
-  const [queue, setQueue] = useState([]); // [{pairId, known, learn}]
-  const queueIdxRef = useRef(0);
+  // stan rundy (silnik gry); ref = zawsze najnowszy stan dla timerów i kliknięć
+  const [game, setGame] = useState(createIdleState);
+  const gameRef = useRef(game);
+  const timersRef = useRef(new Set());
+  const [now, setNow] = useState(() => performance.now());
 
-  // widoczne karty (zawsze max 5 par)
-  const [leftVisible, setLeftVisible] = useState([]);  // [{uid, word, pairId}]
-  const [rightVisible, setRightVisible] = useState([]); // [{uid, word, pairId}]
+  function clearTimers() {
+    for (const id of timersRef.current) clearTimeout(id);
+    timersRef.current.clear();
+  }
 
-  // zaznaczenia (indeksy w tablicach visible)
-  const [selectedLeft, setSelectedLeft] = useState(null);
-  const [selectedRight, setSelectedRight] = useState(null);
+  function dispatch(action) {
+    const { state, effects } = step(gameRef.current, action, { now: performance.now(), rng: random });
+    if (state !== gameRef.current) {
+      gameRef.current = state;
+      setGame(state);
+    }
+    for (const fx of effects) {
+      if (fx.type === "sound") (fx.kind === "correct" ? playCorrect : playWrong)();
+      else if (fx.type === "timer") {
+        const id = setTimeout(() => {
+          timersRef.current.delete(id);
+          dispatch(fx.action);
+        }, fx.ms);
+        timersRef.current.add(id);
+      }
+    }
+  }
 
-  // stan rundy / modal końca
-  const [roundActive, setRoundActive] = useState(false);
-  const [isFinished, setIsFinished] = useState(false);
-
-  // animacyjne znaczniki: {uid: true}
-  const [fading, setFading] = useState({});
-  const [appearing, setAppearing] = useState({});
-
-  // czasy
-  const startTimeRef = useRef(0);
-  const mismatchTimeoutRef = useRef(null);
-
-  // --- init folders + audio ---
-  useEffect(() => {
-    // odczyt bez zapisu; przykładowy folder tylko przy pustej pamięci
+  // --- folders: odczyt bez zapisu; przykładowy folder tylko przy pustej pamięci ---
+  function loadFolderList() {
     const loaded = loadFoldersWithStatus();
     const f = loaded.status === "empty" ? ensureDefaults(loaded.folders) : loaded.folders;
-    setStorageState(loaded);
-
     const names = getFolderNames(f);
-    const last = getLastFolder();
-    const firstFolder = last && names.includes(last) ? last : names[0] || "";
-
+    setStorageState(loaded);
     setFolders(f);
     setFolderNames(names);
-    setSelectedFolder(firstFolder);
+    return names;
+  }
+
+  useEffect(() => {
+    const names = loadFolderList();
+    const last = getLastFolder();
+    setSelectedFolder(last && names.includes(last) ? last : names[0] || "");
 
     const rememberedPairs = getLastPairs();
     if (rememberedPairs) setPairCount(rememberedPairs);
 
     setVolume(1);
     setMuted(false);
+
+    // słówka zmienione w innej karcie: odśwież listę folderów.
+    // Trwająca runda ma własną kopię par — nic się w niej nie zmienia.
+    const unsubscribe = subscribeToFolderChanges((e) => {
+      repairAfterRestore({ seen: e.key === STORAGE_KEY ? [e.newValue] : [] });
+      const fresh = loadFolderList();
+      setSelectedFolder((cur) => (fresh.includes(cur) ? cur : fresh[0] || ""));
+    });
+    // timery rundy nie mogą działać po opuszczeniu strony
+    return () => {
+      unsubscribe();
+      clearTimers();
+    };
   }, [setVolume, setMuted]);
 
-  // --- timer ---
+  // --- zegar: tylko w trakcie rundy ---
+  const playing = game.status === "playing";
   useEffect(() => {
-    if (!roundActive) return;
-    const id = setInterval(() => {
-      const secs = Math.floor((performance.now() - startTimeRef.current) / 1000);
-      setStats((prev) => ({ ...prev, seconds: secs }));
-    }, 200);
+    if (!playing) return;
+    const id = setInterval(() => setNow(performance.now()), 200);
     return () => clearInterval(id);
-  }, [roundActive, setStats]);
+  }, [playing]);
 
-  // helpers
-  const uid = () => Math.random().toString(36).slice(2);
-
-  function buildVisibleFromPairs(pairs) {
-    const left = pairs.map((p) => ({ uid: `L-${uid()}`, word: p.known, pairId: p.pairId }));
-    const right = pairs.map((p) => ({ uid: `R-${uid()}`, word: p.learn, pairId: p.pairId }));
-    // niezależny shuffle, żeby nie stały „para pod parą”
-    return { left: shuffle(left), right: shuffle(right) };
-  }
+  // --- statystyki w pasku u góry ---
+  const stats = roundStats(game, now);
+  useEffect(() => {
+    if (game.status === "idle") return;
+    setStats({ moves: stats.attempts, matches: stats.correct, totalPairs: stats.totalPairs, seconds: stats.seconds });
+  }, [game.status, stats.attempts, stats.correct, stats.totalPairs, stats.seconds, setStats]);
 
   // --- start round ---
   function handleStartRound() {
@@ -110,167 +127,12 @@ function Game() {
     const allPairs = getFolderPairs(folders, selectedFolder) || [];
     if (allPairs.length === 0) { alert("Ten folder jest pusty."); return; }
 
-    const req = parseInt(pairCount, 10) || 2;
-    const finalCount = clamp(req, 2, allPairs.length);
+    clearTimers(); // animacje poprzedniej rundy nie dotkną nowej
+    setNow(performance.now());
+    dispatch({ type: "start", pairs: allPairs, count: pairCount });
 
     setLastFolder(selectedFolder);
-    setLastPairs(finalCount);
-
-    // twórz kolejkę par na rundę
-    const chosenPairs = shuffle(allPairs).slice(0, finalCount).map((p) => ({
-      pairId: stableId(p.known, p.learn),
-      known: p.known,
-      learn: p.learn,
-    }));
-
-    setQueue(chosenPairs);
-
-    // pierwsze „okno” 5 par
-    const initialPairs = chosenPairs.slice(0, MAX_VISIBLE);
-    queueIdxRef.current = Math.min(MAX_VISIBLE, chosenPairs.length);
-
-    const { left, right } = buildVisibleFromPairs(initialPairs);
-    setLeftVisible(left);
-    setRightVisible(right);
-
-    setSelectedLeft(null);
-    setSelectedRight(null);
-    setFading({});
-    setAppearing({});
-
-    startTimeRef.current = performance.now();
-    setRoundActive(true);
-    setIsFinished(false);
-
-    setStats({
-      moves: 0,
-      matches: 0,
-      totalPairs: chosenPairs.length,
-      seconds: 0,
-    });
-  }
-
-  // --- finish ---
-  function finishGameForReal(finalMatches, finalTotalPairs, finalSeconds, finalMoves) {
-    setRoundActive(false);
-    setStats((prev) => ({
-      ...prev,
-      matches: finalMatches,
-      totalPairs: finalTotalPairs,
-      seconds: finalSeconds,
-      moves: finalMoves,
-    }));
-    setIsFinished(true);
-  }
-
-  // --- evaluate ---
-  function evaluatePair(leftCard, rightCard) {
-    const isMatch =
-      leftCard &&
-      rightCard &&
-      leftCard.pairId === rightCard.pairId;
-
-    // +1 ruch
-    setStats((prev) => ({ ...prev, moves: prev.moves + 1 }));
-
-    if (isMatch) {
-      playCorrect();
-
-      // reset zaznaczeń
-      setSelectedLeft(null);
-      setSelectedRight(null);
-
-      // 1) fade-out obu kart tej pary
-      setFading((prev) => ({ ...prev, [leftCard.uid]: true, [rightCard.uid]: true }));
-
-      setTimeout(() => {
-        // 2) usuń trafioną parę z widoku
-        setLeftVisible((prev) => prev.filter((c) => c.pairId !== leftCard.pairId));
-        setRightVisible((prev) => prev.filter((c) => c.pairId !== rightCard.pairId));
-
-        // 3) dołóż następną parę z kolejki (utrzymujemy max 5 par)
-        if (queueIdxRef.current < queue.length) {
-          const nextPair = queue[queueIdxRef.current++];
-          const newLeft = { uid: `L-${uid()}`, word: nextPair.known, pairId: nextPair.pairId };
-          const newRight = { uid: `R-${uid()}`, word: nextPair.learn, pairId: nextPair.pairId };
-
-          setLeftVisible((prev) => {
-            const next = [...prev, newLeft];
-            // mały shuffle, żeby nie zawsze trafiało na koniec
-            return shuffle(next);
-          });
-          setRightVisible((prev) => {
-            const next = [...prev, newRight];
-            return shuffle(next);
-          });
-
-          // 4) fade-in dla nowej pary
-          setAppearing((a) => ({ ...a, [newLeft.uid]: true, [newRight.uid]: true }));
-          setTimeout(() => {
-            setAppearing((a) => {
-              const { [newLeft.uid]: _1, [newRight.uid]: _2, ...rest } = a;
-              return rest;
-            });
-          }, 500);
-        }
-
-        // wyczyść znaczniki fade-out
-        setFading((f) => {
-          const { [leftCard.uid]: _a, [rightCard.uid]: _b, ...rest } = f;
-          return rest;
-        });
-      }, 500); // 0.5s fade-out
-
-      // statystyka + ewentualny koniec
-      setStats((prev) => {
-        const newMatches = prev.matches + 1;
-        if (newMatches === prev.totalPairs) {
-          const secondsEnd = Math.floor((performance.now() - startTimeRef.current) / 1000);
-          finishGameForReal(newMatches, prev.totalPairs, secondsEnd, prev.moves + 1);
-        }
-        return { ...prev, matches: newMatches };
-      });
-    } else {
-      playWrong();
-      if (mismatchTimeoutRef.current) clearTimeout(mismatchTimeoutRef.current);
-      mismatchTimeoutRef.current = setTimeout(() => {
-        setSelectedLeft(null);
-        setSelectedRight(null);
-      }, 600);
-    }
-  }
-
-  // --- clicks (na widocznych indeksach) ---
-  function onLeftClick(idx) {
-    if (!roundActive) return;
-    const card = leftVisible[idx];
-    if (!card) return;
-
-    if (selectedLeft === idx) {
-      setSelectedLeft(null);
-      return;
-    }
-    setSelectedLeft(idx);
-
-    if (selectedRight !== null) {
-      evaluatePair(leftVisible[idx], rightVisible[selectedRight]);
-    }
-  }
-
-  function onRightClick(idx) {
-    if (!roundActive) return;
-    const card = rightVisible[idx];
-    if (!card) return;
-
-    if (selectedRight === idx) {
-      setSelectedRight(null);
-      return;
-    }
-    setSelectedRight(idx);
-
-    if (selectedLeft !== null) {
-      evaluatePair(leftVisible[selectedLeft], rightVisible[idx]);
-    }
+    setLastPairs(gameRef.current.queue.length);
   }
 
   // --- modal actions ---
@@ -284,18 +146,38 @@ function Game() {
     navigate("/mystorage");
   }
 
-  // --- stats for modal ---
-  const pairsFound = stats.matches || 0;
-  const totalPairs = stats.totalPairs || 0;
-  const accuracy = totalPairs > 0 ? Math.round((pairsFound / totalPairs) * 100) : 0;
-  const timeSec = stats.seconds || 0;
-  const modalStats = { pairsFound, totalPairs, accuracy, timeSec };
+  const modalStats = {
+    pairsFound: stats.correct,
+    totalPairs: stats.totalPairs,
+    accuracy: stats.accuracy,
+    attempts: stats.attempts,
+    wrong: stats.wrong,
+    timeSec: stats.seconds,
+  };
+
+  function renderCard(side, card) {
+    const cls =
+      "card" +
+      (isHighlighted(game, side, card.id) ? " selected" : "") +
+      (game.removing[card.id] ? " fading" : "") +
+      (game.appearing[card.id] ? " appearing" : "");
+    return (
+      <button
+        key={card.id}
+        className={cls}
+        aria-disabled={game.removing[card.id] ? "true" : undefined}
+        onClick={() => dispatch({ type: "select", side, cardId: card.id })}
+      >
+        {card.word}
+      </button>
+    );
+  }
 
   return (
     <>
       <main className="board wrap">
         {/* PANEL USTAWIEŃ — widoczny tylko PRZED grą */}
-        {!roundActive && (
+        {!playing && (
           <section className="panel" aria-label="Wybór folderu">
             <StorageNotice state={storageState} />
             <div className="row">
@@ -343,49 +225,14 @@ function Game() {
         )}
 
         {/* PLANSZA — widoczna tylko W TRAKCIE gry */}
-        {roundActive && (
+        {playing && (
           <section className="panel" aria-live="polite">
             <div className="columns">
-              {/* LEWA */}
               <div className="col" aria-label="Kolumna język 1">
-                {leftVisible.map((card, idx) => {
-                  const isSelected = selectedLeft === idx;
-                  const cls =
-                    "card" +
-                    (isSelected ? " selected" : "") +
-                    (fading[card.uid] ? " fading" : "") +
-                    (appearing[card.uid] ? " appearing" : "");
-                  return (
-                    <button
-                      key={card.uid}
-                      className={cls}
-                      onClick={() => onLeftClick(idx)}
-                    >
-                      {card.word}
-                    </button>
-                  );
-                })}
+                {game.left.map((card) => renderCard("left", card))}
               </div>
-
-              {/* PRAWA */}
               <div className="col" aria-label="Kolumna język 2">
-                {rightVisible.map((card, idx) => {
-                  const isSelected = selectedRight === idx;
-                  const cls =
-                    "card" +
-                    (isSelected ? " selected" : "") +
-                    (fading[card.uid] ? " fading" : "") +
-                    (appearing[card.uid] ? " appearing" : "");
-                  return (
-                    <button
-                      key={card.uid}
-                      className={cls}
-                      onClick={() => onRightClick(idx)}
-                    >
-                      {card.word}
-                    </button>
-                  );
-                })}
+                {game.right.map((card) => renderCard("right", card))}
               </div>
             </div>
           </section>
@@ -394,7 +241,7 @@ function Game() {
 
       {/* MODAL KOŃCA GRY */}
       <GameOverModal
-        isOpen={isFinished}
+        isOpen={game.status === "finished"}
         stats={modalStats}
         onPlayAgain={handlePlayAgain}
         onGoMenu={handleGoMenu}

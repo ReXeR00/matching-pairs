@@ -21,6 +21,8 @@ import {
   saveFolders,
   isDeletableCopyKey,
   removeCopy,
+  readGeneration,
+  readGenerationRaw,
 } from "./storage.js";
 
 export const EXPORT_FORMAT = "matching-pairs-backup";
@@ -60,7 +62,7 @@ function describe(key, raw) {
   } else if (key.startsWith(RECOVERY_PREFIX)) {
     kind = "recovery";
     label = "Kopia odzyskiwania";
-    const m = key.match(/:(\d{4}-\d{2}-\d{2}T[\d:.]+Z)(?:-\d+)?$/);
+    const m = key.match(/:(\d{4}-\d{2}-\d{2}T[\d:.]+Z)(?:-[a-z0-9]+)*$/);
     createdAt = m ? m[1] : null;
   }
   return { key, kind, label, createdAt, raw, chars: raw.length, ...info, ...summarize(info.folders) };
@@ -148,10 +150,13 @@ export function restoreSnapshot({ raw, key, mode = "merge" }) {
     if (!recoveryKey) return { ok: false, error: "recovery-failed", reason: lastWriteFailureReason() };
   }
 
-  // "zastąp": nowa generacja PRZED zapisem danych, żeby inne karty nie
-  // dopisały z powrotem świadomie zastąpionych słówek
+  // "zastąp": przywracane dane też trafiają do sprawdzonej kopii, a nowa
+  // generacja (jeden klucz: id + obie kopie) powstaje PRZED zapisem danych —
+  // inne karty odróżnią świadomie zastąpione słówka od nowych zapisów
   if (mode === "replace") {
-    const gen = startNewGeneration();
+    const restoredKey = preserveForRecovery(JSON.stringify(src.folders));
+    if (!restoredKey) return { ok: false, error: "recovery-failed", reason: lastWriteFailureReason(), recoveryKey };
+    const gen = startNewGeneration({ replacedKey: recoveryKey, restoredKey });
     if (!gen.ok) return { ok: false, error: "epoch-failed", reason: gen.reason, recoveryKey };
   }
 
@@ -171,8 +176,16 @@ export { isDeletableCopyKey };
 
 // `raw` — zawartość pokazana użytkownikowi; jeśli kopia się zmieniła, nic nie usuwamy.
 // Obecne słówka (STORAGE_KEY) i starsze klucze nie mogą być usunięte.
+// Kopie wskazane przez ostatnie przywrócenie chronią zapisy z innych kart —
+// nie można ich usunąć, dopóki nie zastąpi ich kolejne przywrócenie.
+export function isCopyInUse(key) {
+  const gen = readGeneration(readGenerationRaw());
+  return !!gen && (gen.replaced === key || gen.restored === key);
+}
+
 export function deleteSnapshot({ key, raw }) {
   if (!isDeletableCopyKey(key)) return { ok: false, error: "protected-key" };
+  if (isCopyInUse(key)) return { ok: false, error: "copy-in-use" };
   const now = readSnapshotRaw(key);
   if (now === null || now !== raw) return { ok: false, error: "source-changed" };
   if (!removeCopy(key)) return { ok: false, error: "delete-failed" };
@@ -189,6 +202,7 @@ const MESSAGES = {
   "epoch-failed": "Nie udało się przygotować przywracania (zapis znacznika nie powiódł się), więc nic nie zostało nadpisane.",
   "write-failed": "Nie udało się zapisać. Wcześniej zapisane słówka są nienaruszone.",
   "source-changed": "Ta kopia zmieniła się od podglądu — otwórz podgląd ponownie.",
+  "copy-in-use": "Ta kopia chroni ostatnie przywrócenie (zapisy z innych kart) — nie można jej teraz usunąć.",
   "protected-key": "Tej pozycji nie można usunąć — obecne słówka i starsze dane są chronione.",
   "delete-failed": "Nie udało się usunąć kopii (pamięć przeglądarki zablokowana?). Nic nie zostało zmienione.",
   "unreadable-source": "Tej kopii nie da się odczytać jako słówek — możesz ją tylko pobrać.",

@@ -5,8 +5,10 @@ import StorageNotice from "../components/StorageNotice.jsx";
 import { storageErrorMessage } from "../lib/backup.js";
 import {
   loadFoldersWithStatus,
+  STORAGE_KEY,
   updateFolders,
   reconcileLostWrite,
+  repairAfterRestore,
   subscribeToFolderChanges,
   ensureDefaults,
   getFolderNames,
@@ -55,14 +57,24 @@ function Storage() {
     loadView();
     // inna karta zmieniła słówka: przywróć ewentualnie nadpisany zapis tej karty
     // i odśwież listę (wpisane w formularzu słówka zostają)
-    return subscribeToFolderChanges(() => {
+    return subscribeToFolderChanges((e) => {
       const mine = mineRef.current;
       const rec = reconcileLostWrite(mine.raw, { epoch: mine.epoch });
+      // słówka zgubione w wyścigu zapisów innych kart (także już zamkniętych)
+      // oraz nadpisanie przywróconych danych przez kartę z nieaktualnym odczytem
+      const fix = repairAfterRestore({ seen: e.key === STORAGE_KEY ? [e.newValue] : [] });
       loadView();
       if (rec.superseded) {
-        // w innej karcie przywrócono kopię ("zastąp") — nie dopisujemy starych słówek
-        mineRef.current = { raw: null, epoch: rec.epoch };
-        setSyncNote(SUPERSEDED_NOTE);
+        // w innej karcie przywrócono kopię ("zastąp") — świadomie zastąpione słówka nie wracają,
+        // a słówka zapisane tu w trakcie przywracania zostają
+        mineRef.current = rec.raw ? { raw: rec.raw, epoch: rec.epoch } : { raw: null, epoch: rec.epoch };
+        setSyncNote(
+          rec.restored > 0
+            ? `${SUPERSEDED_NOTE} Zachowano ${rec.restored} wpis(y) zapisane tu w trakcie przywracania.`
+            : SUPERSEDED_NOTE
+        );
+      } else if (fix.ok && (fix.rescued > 0 || fix.repaired > 0)) {
+        setSyncNote(`Przywrócono ${fix.rescued + fix.repaired} wpis(y) utracone przy równoczesnym zapisie w innej karcie. Lista została odświeżona.`);
       } else if (rec.ok && rec.restored > 0) {
         mineRef.current = { raw: rec.raw, epoch: mine.epoch };
         setSyncNote(`Przywrócono ${rec.restored} wpis(y) nadpisane przez inną kartę. Lista została odświeżona.`);
@@ -70,7 +82,7 @@ function Storage() {
         setSyncNote("Słówka zapisane w tej karcie zostały usunięte lub uszkodzone w innej karcie — nic nie nadpisano automatycznie.");
       } else {
         // przywrócenie zapisuje znacznik i dane osobno (dwa zdarzenia) — nie zasłaniamy ważniejszej informacji
-        setSyncNote((prev) => (prev === SUPERSEDED_NOTE ? prev : "Słówka zmieniły się w innej karcie — lista została odświeżona."));
+        setSyncNote((prev) => (prev.startsWith(SUPERSEDED_NOTE) ? prev : "Słówka zmieniły się w innej karcie — lista została odświeżona."));
       }
     });
   }, []);

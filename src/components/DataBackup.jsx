@@ -10,11 +10,12 @@ import {
   restoreSnapshot,
   storageErrorMessage,
   downloadText,
+  deleteSnapshot,
+  isDeletableCopyKey,
   MAX_IMPORT_CHARS,
+  STORAGE_LIMIT_CHARS,
 } from "../lib/backup.js";
 
-// Typowy limit localStorage w przeglądarkach (znaki, cały origin).
-const TYPICAL_LIMIT_CHARS = 5_000_000;
 const STATUS_TEXT = {
   ok: "poprawne",
   partial: "częściowo uszkodzone",
@@ -30,6 +31,8 @@ function DataBackup() {
   const [usage, setUsage] = useState(undefined); // undefined = jeszcze nie sprawdzono, null = pamięć niedostępna
   const [preview, setPreview] = useState(null); // { title, raw, key?, ...inspect }
   const [message, setMessage] = useState("");
+  const [pendingDelete, setPendingDelete] = useState(null); // kopia czekająca na potwierdzenie
+  const [understood, setUnderstood] = useState(false);
 
   function refresh() {
     setSnapshots(listSnapshots());
@@ -65,6 +68,24 @@ function DataBackup() {
       return;
     }
     setPreview({ ...res, title: `Plik: ${file.name}` });
+  }
+
+  function askDelete(s) {
+    setMessage("");
+    setPreview(null);
+    setUnderstood(false);
+    setPendingDelete(s);
+  }
+
+  function confirmDelete() {
+    const s = pendingDelete;
+    if (!window.confirm(`Usunąć na stałe: ${s.label} ${when(s.createdAt)} (${k(s.chars)})?
+
+Tej kopii nie da się potem odzyskać. Obecne słówka nie zostaną zmienione.`)) return;
+    const res = deleteSnapshot({ key: s.key, raw: s.raw });
+    setMessage(res.ok ? `Usunięto kopię ${s.key} (zwolniono ${k(res.freedChars)}).` : storageErrorMessage(res));
+    setPendingDelete(null);
+    refresh();
   }
 
   function restore(mode) {
@@ -107,18 +128,20 @@ function DataBackup() {
     );
   }
 
-  const nearlyFull = usage.totalChars > TYPICAL_LIMIT_CHARS * 0.8;
+  const percent = Math.round((usage.totalChars / STORAGE_LIMIT_CHARS) * 100);
+  const nearlyFull = percent >= 80;
+  const copiesChars = snapshots.filter((s) => isDeletableCopyKey(s.key)).reduce((n, s) => n + s.key.length + s.chars, 0);
 
   return (
     <section className="panel" id="dane" aria-label="Dane i kopia zapasowa">
       <h2>Dane i kopia zapasowa</h2>
       <p className="hint">
-        Słówka są zapisane tylko w tej przeglądarce. Zajęte miejsce: {k(usage.totalChars)} (ta aplikacja: {k(usage.appChars)}).
-        Przeglądarki zwykle pozwalają na ok. 5 mln znaków — wspólnie dla wszystkich stron z rexer00.github.io.
+        Słówka są zapisane tylko w tej przeglądarce. Zajęte miejsce: {k(usage.totalChars)} ({percent}% z ok. 5,2 mln znaków),
+        w tym ta aplikacja: {k(usage.appChars)}, kopie: {k(copiesChars)}. Limit jest wspólny dla wszystkich stron z rexer00.github.io.
       </p>
       {nearlyFull && (
-        <p className="hint" role="status">
-          ⚠️ Mało miejsca w pamięci przeglądarki — wyeksportuj kopię słówek.
+        <p className="hint" role="status" id="capacity-warning">
+          ⚠️ Mało miejsca w pamięci przeglądarki — zapisy mogą się nie udać. Wyeksportuj słówka; niepotrzebne kopie możesz pobrać i usunąć poniżej.
         </p>
       )}
 
@@ -156,14 +179,45 @@ function DataBackup() {
                 Pobierz
               </button>
               {s.kind !== "current" && (
-                <button className="btn ghost" onClick={() => { setMessage(""); setPreview({ ...s, title: `${s.label} ${when(s.createdAt)}`.trim() }); }}>
+                <button className="btn ghost" onClick={() => { setMessage(""); setPendingDelete(null); setPreview({ ...s, title: `${s.label} ${when(s.createdAt)}`.trim() }); }}>
                   Podgląd
+                </button>
+              )}
+              {isDeletableCopyKey(s.key) && (
+                <button className="btn ghost" onClick={() => askDelete(s)}>
+                  Usuń…
                 </button>
               )}
             </div>
           </li>
         ))}
       </ul>
+
+      {pendingDelete && (
+        <div className="snapshot-preview" aria-label="Usuwanie kopii" id="delete-panel">
+          <h3>Usunąć kopię: {pendingDelete.label} {when(pendingDelete.createdAt)}</h3>
+          <p className="hint">
+            {pendingDelete.key} • {STATUS_TEXT[pendingDelete.status]}
+            {pendingDelete.status !== "unreadable" && ` • ${counts(pendingDelete)}`} • {k(pendingDelete.chars)}.
+            Usuniętej kopii nie da się odzyskać — najpierw ją pobierz, jeśli może się przydać.
+          </p>
+          <label className="hint">
+            <input type="checkbox" id="delete-understood" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />{" "}
+            Rozumiem, że ta kopia zostanie usunięta na stałe
+          </label>
+          <div className="row">
+            <button className="btn" onClick={() => download(pendingDelete)}>
+              Pobierz przed usunięciem
+            </button>
+            <button className="btn" onClick={confirmDelete} disabled={!understood}>
+              Usuń na stałe
+            </button>
+            <button className="btn ghost" onClick={() => setPendingDelete(null)}>
+              Anuluj
+            </button>
+          </div>
+        </div>
+      )}
 
       {preview && (
         <div className="snapshot-preview" aria-label="Podgląd kopii">

@@ -15,6 +15,8 @@ import {
   mergePairs,
 } from "../lib/storage.js";
 const MERGED_NOTE = " (uwzględniono też zmiany zapisane w innej karcie)";
+const SUPERSEDED_NOTE =
+  "W innej karcie przywrócono kopię słówek — lista została odświeżona. Wcześniejsze dane są w kopii odzyskiwania.";
 
 function Storage() {
   const [folders, setFolders] = useState({});
@@ -27,7 +29,8 @@ function Storage() {
   const [saveError, setSaveError] = useState(null);
   // rewizja danych widocznych na stronie i ostatnia wartość zapisana przez tę kartę
   const revisionRef = useRef(null);
-  const lastWrittenRef = useRef(null);
+  // to, co ta karta zapisała, i generacja danych, w której to zapisała
+  const mineRef = useRef({ raw: null, epoch: null });
 
   function showFolders(f, preferred) {
     const names = getFolderNames(f);
@@ -53,15 +56,21 @@ function Storage() {
     // inna karta zmieniła słówka: przywróć ewentualnie nadpisany zapis tej karty
     // i odśwież listę (wpisane w formularzu słówka zostają)
     return subscribeToFolderChanges(() => {
-      const rec = reconcileLostWrite(lastWrittenRef.current);
+      const mine = mineRef.current;
+      const rec = reconcileLostWrite(mine.raw, { epoch: mine.epoch });
       loadView();
-      if (rec.ok && rec.restored > 0) {
-        lastWrittenRef.current = rec.raw;
+      if (rec.superseded) {
+        // w innej karcie przywrócono kopię ("zastąp") — nie dopisujemy starych słówek
+        mineRef.current = { raw: null, epoch: rec.epoch };
+        setSyncNote(SUPERSEDED_NOTE);
+      } else if (rec.ok && rec.restored > 0) {
+        mineRef.current = { raw: rec.raw, epoch: mine.epoch };
         setSyncNote(`Przywrócono ${rec.restored} wpis(y) nadpisane przez inną kartę. Lista została odświeżona.`);
       } else if (!rec.ok) {
         setSyncNote("Słówka zapisane w tej karcie zostały usunięte lub uszkodzone w innej karcie — nic nie nadpisano automatycznie.");
       } else {
-        setSyncNote("Słówka zmieniły się w innej karcie — lista została odświeżona.");
+        // przywrócenie zapisuje znacznik i dane osobno (dwa zdarzenia) — nie zasłaniamy ważniejszej informacji
+        setSyncNote((prev) => (prev === SUPERSEDED_NOTE ? prev : "Słówka zmieniły się w innej karcie — lista została odświeżona."));
       }
     });
   }, []);
@@ -69,10 +78,11 @@ function Storage() {
   // zapis zawsze na najnowszych danych z pamięci, nie na kopii z chwili otwarcia strony;
   // `mine` przywraca wpisy tej karty, gdyby jej odczyt był nieaktualny
   function applyChange(change) {
-    const res = updateFolders(change, { expected: revisionRef.current, mine: lastWrittenRef.current });
+    const mine = mineRef.current;
+    const res = updateFolders(change, { expected: revisionRef.current, mine: mine.raw, epoch: mine.epoch });
     if (res.ok) {
       revisionRef.current = res.raw;
-      lastWrittenRef.current = res.raw;
+      mineRef.current = { raw: res.raw, epoch: res.epoch };
     } else {
       alert(storageErrorMessage(res));
     }

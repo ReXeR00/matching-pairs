@@ -15,14 +15,19 @@ import {
   listRecoveryKeys,
   loadFoldersWithStatus,
   preserveForRecovery,
+  startNewGeneration,
   lastWriteFailureReason,
   mergeFolders,
   saveFolders,
+  isDeletableCopyKey,
+  removeCopy,
 } from "./storage.js";
 
 export const EXPORT_FORMAT = "matching-pairs-backup";
 export const EXPORT_VERSION = 1;
 export const MAX_IMPORT_CHARS = 5_000_000;
+// Zmierzony limit localStorage w Edge/Chromium: 5 242 880 znaków (klucz + wartość) na origin.
+export const STORAGE_LIMIT_CHARS = 5_242_880;
 
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
@@ -143,6 +148,13 @@ export function restoreSnapshot({ raw, key, mode = "merge" }) {
     if (!recoveryKey) return { ok: false, error: "recovery-failed", reason: lastWriteFailureReason() };
   }
 
+  // "zastąp": nowa generacja PRZED zapisem danych, żeby inne karty nie
+  // dopisały z powrotem świadomie zastąpionych słówek
+  if (mode === "replace") {
+    const gen = startNewGeneration();
+    if (!gen.ok) return { ok: false, error: "epoch-failed", reason: gen.reason, recoveryKey };
+  }
+
   let next = src.folders;
   if (mode === "merge") {
     next = current.folders;
@@ -153,6 +165,20 @@ export function restoreSnapshot({ raw, key, mode = "merge" }) {
   return { ok: true, mode, recoveryKey, raw: res.raw, ...summarize(next) };
 }
 
+// --- ręczne usuwanie kopii ---
+
+export { isDeletableCopyKey };
+
+// `raw` — zawartość pokazana użytkownikowi; jeśli kopia się zmieniła, nic nie usuwamy.
+// Obecne słówka (STORAGE_KEY) i starsze klucze nie mogą być usunięte.
+export function deleteSnapshot({ key, raw }) {
+  if (!isDeletableCopyKey(key)) return { ok: false, error: "protected-key" };
+  const now = readSnapshotRaw(key);
+  if (now === null || now !== raw) return { ok: false, error: "source-changed" };
+  if (!removeCopy(key)) return { ok: false, error: "delete-failed" };
+  return { ok: true, freedChars: key.length + raw.length };
+}
+
 // --- komunikaty ---
 
 const MESSAGES = {
@@ -160,8 +186,11 @@ const MESSAGES = {
   conflict: "Nie udało się zapisać — dane zmieniły się w międzyczasie w innej karcie. Spróbuj ponownie.",
   "backup-failed": "Nie udało się zapisać — nie powstała kopia zapasowa, więc nic nie zostało nadpisane. Wcześniej zapisane słówka są nienaruszone.",
   "recovery-failed": "Nie udało się zachować kopii obecnych słówek, więc nic nie zostało nadpisane.",
+  "epoch-failed": "Nie udało się przygotować przywracania (zapis znacznika nie powiódł się), więc nic nie zostało nadpisane.",
   "write-failed": "Nie udało się zapisać. Wcześniej zapisane słówka są nienaruszone.",
   "source-changed": "Ta kopia zmieniła się od podglądu — otwórz podgląd ponownie.",
+  "protected-key": "Tej pozycji nie można usunąć — obecne słówka i starsze dane są chronione.",
+  "delete-failed": "Nie udało się usunąć kopii (pamięć przeglądarki zablokowana?). Nic nie zostało zmienione.",
   "unreadable-source": "Tej kopii nie da się odczytać jako słówek — możesz ją tylko pobrać.",
   "empty-source": "Ta kopia nie zawiera żadnych folderów.",
   "not-json": "To nie jest poprawny plik JSON.",

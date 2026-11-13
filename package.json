@@ -1,15 +1,17 @@
 {
   "name": "matching-pairs",
   "version": "1.0.0",
-"scripts": {
-  "dev": "vite --open",
-  "build": "vite build",
-  "test": "node --test \"tests/**/*.test.mjs\"",
-  "preview": "vite preview",
-  "sass": "sass --watch src/styles.scss:src/styles.css",
-  "deploy": "node -e \"console.error('Manual deploy is disabled. Release via GitHub Actions: Deploy to GitHub Pages (workflow_dispatch on main).');process.exit(1)\"",
-  "deploy:check": "npm run build && node scripts/verify-build.mjs config && node scripts/verify-build.mjs dist"
-},
+  "scripts": {
+    "dev": "vite --open",
+    "build": "vite build",
+    "test": "node --test \"tests/**/*.test.mjs\"",
+    "test:e2e": "playwright test",
+    "preview": "vite preview",
+    "preview:pages": "node scripts/pages-server.mjs",
+    "sass": "sass --watch src/styles.scss:src/styles.css",
+    "deploy": "node -e \"console.error('Manual deploy is disabled. Release via GitHub Actions: Deploy to GitHub Pages (workflow_dispatch on main).');process.exit(1)\"",
+    "deploy:check": "npm run build && node scripts/verify-build.mjs config && node scripts/verify-build.mjs dist"
+  },
   "engines": {
     "node": ">=24 <25"
   },
@@ -19,8 +21,9 @@
     "react-router-dom": "^6.28.0"
   },
   "devDependencies": {
-    "vite": "^5.4.8",
+    "@playwright/test": "1.65.0",
     "@vitejs/plugin-react": "^4.2.0",
-    "sass": "^1.93.2"
+    "sass": "^1.93.2",
+    "vite": "^5.4.8"
   }
 }

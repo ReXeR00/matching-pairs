@@ -79,6 +79,15 @@ function checkDist() {
     .filter((r) => !existsSync(path.join(dist, r.slice(EXPECTED_BASE.length))));
   check("every referenced asset exists in dist/", missing.length === 0, missing.join(" "));
 
+  check("index.html has no <base> tag (Vite base + router basename handle paths)", !/<base\b/i.test(html));
+  const icon = local.find((r) => /\.(png|ico|svg)$/.test(r) && /rel="icon"/.test(html));
+  check("favicon is referenced under the base path", !!icon && icon.startsWith(EXPECTED_BASE), icon || "none");
+
+  // GitHub Pages: nieznane ścieżki (głębokie linki, odświeżenie) dostają 404.html
+  const fallback = path.join(dist, "404.html");
+  check("404.html exists for SPA deep links", existsSync(fallback));
+  check("404.html is identical to index.html", existsSync(fallback) && readFileSync(fallback, "utf8") === html);
+
   for (const s of scripts) {
     const file = path.join(dist, s.slice(EXPECTED_BASE.length));
     if (!existsSync(file)) continue;

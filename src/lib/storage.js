@@ -16,6 +16,10 @@ export const LEGACY_KEYS = ["wordFolders", "matchbox-folders"];
 export const BACKUP_KEY = "mp:backup:wordFolders_v2";
 // Nienaruszone kopie danych, których nie dało się w pełni odczytać.
 export const RECOVERY_PREFIX = "mp:recovery:";
+// Generacja danych: zmienia się przy przywróceniu kopii w trybie "zastąp".
+// Karta, która widziała starszą generację, nie dopisuje z powrotem swoich
+// wcześniejszych słówek (zostały świadomie zastąpione; są w kopii odzyskiwania).
+export const EPOCH_KEY = "mp:epoch:wordFolders_v2";
 
 const LAST_FOLDER_KEY = "mp_last_folder";
 const LAST_PAIRS_KEY = "mp_last_pairs";
@@ -168,6 +172,25 @@ export function readSnapshotRaw(key) {
   return isSnapshotKey(key) ? safeGet(key) : null;
 }
 
+// Ręczne usunięcie kopii (tylko kopia zapasowa i kopie odzyskiwania — nigdy
+// obecne słówka, starsze klucze ani dane innych stron). Wywoływane wyłącznie
+// po potwierdzeniu w UI; aplikacja nigdy nie usuwa kopii automatycznie.
+export function isDeletableCopyKey(key) {
+  return typeof key === "string" && (key === BACKUP_KEY || key.startsWith(RECOVERY_PREFIX));
+}
+
+export function removeCopy(key) {
+  if (!isDeletableCopyKey(key)) return false;
+  const ls = getStorage();
+  if (!ls) return false;
+  try {
+    ls.removeItem(key);
+  } catch {
+    return false;
+  }
+  return safeGet(key) === null;
+}
+
 // Zajętość localStorage w znakach (klucz + wartość): cały origin i ta aplikacja.
 // Origin rexer00.github.io i jego limit dzielą wszystkie strony tego konta.
 export function storageUsage() {
@@ -193,9 +216,17 @@ export function storageUsage() {
 
 // status: "ok" | "partial" | "unreadable" | "empty" | "migrated" | "unavailable"
 // raw: dokładna wartość STORAGE_KEY w chwili odczytu (rewizja do wykrywania nieaktualnych kopii)
+// epoch: generacja danych (EPOCH_KEY) w chwili odczytu; null = brak przywróceń
 export function loadFoldersWithStatus() {
   const res = loadUnversioned();
-  return { ...res, raw: res.status === "unavailable" ? null : safeGet(STORAGE_KEY) };
+  const available = res.status !== "unavailable";
+  return { ...res, raw: available ? safeGet(STORAGE_KEY) : null, epoch: available ? safeGet(EPOCH_KEY) : null };
+}
+
+// Rozpoczyna nową generację danych (przed zapisem przywróconej kopii).
+export function startNewGeneration() {
+  const epoch = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return safeSet(EPOCH_KEY, epoch) ? { ok: true, epoch } : { ok: false, reason: lastWriteFailure };
 }
 
 function loadUnversioned() {
@@ -248,20 +279,23 @@ export function saveFolders(folders, { expected } = {}) {
 //   (zmiana z innej karty).
 // `mine`: wszystko, co ta karta już zapisała (poprzednie `raw`); brakujące wpisy
 //   są dopisywane z powrotem (odczyt w tej karcie mógł być nieaktualny).
-// Zwraca { ok, error?, folders, raw, result, stale, restored }.
-export function updateFolders(change, { expected, mine } = {}) {
+// `epoch`: generacja, w której powstało `mine`; po przywróceniu kopii w innej
+//   karcie (`superseded: true`) `mine` jest pomijane.
+// Zwraca { ok, error?, folders, raw, epoch, result, stale, restored, superseded }.
+export function updateFolders(change, { expected, mine, epoch } = {}) {
   const loaded = loadFoldersWithStatus();
-  if (loaded.status === "unavailable") return { ok: false, error: "unavailable", stale: false, restored: 0 };
+  if (loaded.status === "unavailable") return { ok: false, error: "unavailable", stale: false, restored: 0, superseded: false };
 
   // jak przy wejściu na stronę: przykładowy folder tylko przy pustej pamięci
   const folders = loaded.status === "empty" ? ensureDefaults(loaded.folders) : loaded.folders;
-  const own = loaded.status === "ok" || loaded.status === "partial" ? parseOwn(mine) : {};
+  const superseded = mine != null && (epoch ?? null) !== loaded.epoch;
+  const own = !superseded && (loaded.status === "ok" || loaded.status === "partial") ? parseOwn(mine) : {};
   const restored = mergeFolders(folders, own);
   const result = change(folders);
   const stale = expected !== undefined && expected !== loaded.raw;
   const res = saveFolders(folders, { expected: loaded.raw });
-  if (!res.ok) return { ok: false, error: res.error, reason: res.reason, stale, restored: 0 };
-  return { ok: true, folders, raw: res.raw, result, stale, restored };
+  if (!res.ok) return { ok: false, error: res.error, reason: res.reason, stale, restored: 0, superseded };
+  return { ok: true, folders, raw: res.raw, epoch: loaded.epoch, result, stale, restored, superseded };
 }
 
 function parseOwn(mine) {
@@ -292,11 +326,15 @@ export function mergeFolders(folders, own) {
 // wszystko, co ta karta zapisała (`mine`), a czego nie ma w pamięci, zostało
 // nadpisane przez inną kartę. Odczyt tuż przed zapisem nie czyni localStorage
 // atomowym między kartami — to jest siatka bezpieczeństwa na taki wyścig.
-// Zwraca { ok: true, restored, raw? } albo { ok: false, error, missing }.
+// Zwraca { ok: true, restored, raw? } albo { ok: false, error, missing };
+// { ok: true, restored: 0, superseded: true } — dane zastąpiono kopią w innej karcie.
 // Po przywróceniu `raw` jest nowym `mine` tej karty.
-export function reconcileLostWrite(mine) {
+export function reconcileLostWrite(mine, { epoch } = {}) {
   const own = parseOwn(mine);
   const current = loadFoldersWithStatus();
+  if (mine != null && (epoch ?? null) !== current.epoch) {
+    return { ok: true, restored: 0, superseded: true, epoch: current.epoch };
+  }
   const missing = mergeFolders({ ...current.folders }, own); // tylko liczy (płytka kopia)
   if (missing === 0) return { ok: true, restored: 0 };
   // dane usunięte lub nieczytelne: nie zapisujemy automatycznie
@@ -304,7 +342,7 @@ export function reconcileLostWrite(mine) {
     return { ok: false, error: "unsafe-target", missing };
   }
 
-  const res = updateFolders(() => {}, { mine });
+  const res = updateFolders(() => {}, { mine, epoch });
   return res.ok ? { ok: true, restored: res.restored, raw: res.raw } : { ok: false, error: res.error, missing };
 }
 
@@ -313,7 +351,7 @@ export function reconcileLostWrite(mine) {
 export function subscribeToFolderChanges(callback) {
   if (typeof window === "undefined" || typeof window.addEventListener !== "function") return () => {};
   const onStorage = (e) => {
-    if (e.key === STORAGE_KEY || e.key === null) callback(e);
+    if (e.key === STORAGE_KEY || e.key === EPOCH_KEY || e.key === null) callback(e);
   };
   window.addEventListener("storage", onStorage);
   return () => window.removeEventListener("storage", onStorage);

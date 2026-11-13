@@ -46,6 +46,8 @@ async function wrongAttempt(page, known, wrongKnown) {
 
 async function finishAll(page) {
   for (let guard = 0; guard < 50 && (await page.locator(".columns").count()); guard++) {
+    // a selection left over from earlier clicks would be toggled off by the next click
+    for (const sel of await page.locator(".columns .card.selected:not(.fading)").all()) await sel.click();
     const words = await openLeftWords(page);
     if (!words.length) break;
     await matchPair(page, words[0]);
@@ -104,11 +106,12 @@ test.describe("scoring", () => {
 test.describe("transient states", () => {
   test("cards being removed after a match cannot be matched again", async ({ page }) => {
     await startRound(page, { pairs: folder(6) });
-    await card(left(page), "k1").click();
-    await card(right(page), "l1").click();
+    const [w] = await openLeftWords(page); // 5 of the 6 pairs are on the board
+    await card(left(page), w).click();
+    await card(right(page), answer(w)).click();
     // during the 500 ms removal animation, click the same pair again (rapidly)
-    await card(left(page), "k1").click({ force: true, timeout: 300 }).catch(() => {});
-    await card(right(page), "l1").click({ force: true, timeout: 300 }).catch(() => {});
+    await card(left(page), w).click({ force: true, timeout: 300 }).catch(() => {});
+    await card(right(page), answer(w)).click({ force: true, timeout: 300 }).catch(() => {});
     await page.waitForTimeout(700);
     expect(await chip(page, "Pary")).toBe("Pary: 1/6");
     expect(await chip(page, "Ruchy")).toBe("Ruchy: 1");

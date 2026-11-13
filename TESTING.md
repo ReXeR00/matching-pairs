@@ -48,6 +48,11 @@ another copy of `src/lib` to measure older code). Deterministic orderings of the
 unit-tested in `tests/restore-race.test.mjs` with a per-tab cache model
 (`tests/helpers/multi-tab-storage.mjs`).
 
+Game suites: `tests/game-engine.test.mjs` and `tests/game-ambiguity.test.mjs` (seeded random play;
+no two clickable cards that look the same, and no visible left/right combination that reads as a
+folder pair but belongs to different pairs), plus `e2e/game.spec.mjs` and `e2e/game-ambiguity.spec.mjs`
+in the browser.
+
 To look at the build the way GitHub Pages serves it: `npm run build && npm run preview:pages`,
 then open <http://127.0.0.1:4173/matching-pairs/>.
 
